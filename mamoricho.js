@@ -27,10 +27,16 @@ export const TEMPLATES = [
   { id: 'linux.docker', kind: ['ssh'], label: 'コンテナ', steps: [['docker', 'ps', '-a'], ['docker', 'images']] },
   { id: 'linux.webroot', kind: ['ssh'], label: '公開フォルダで最近変わったファイル (7 日)', steps: [['find', '/var/www', '-type', 'f', '-mtime', '-7', '-newer', '/etc/hostname'], ['find', '/var/www', '-type', 'f', '-name', '*.php', '-mtime', '-7']] },
   { id: 'linux.backup', kind: ['ssh'], label: 'バックアップの実態 (最終更新)', steps: [['ls', '-la', '--time-style=long-iso', '/backup'], ['ls', '-la', '--time-style=long-iso', '/mnt/backup'], ['ls', '-la', '--time-style=long-iso', '/var/backups'], ['df', '-h']] },
-  { id: 'web.head', kind: ['web'], label: '応答とヘッダ (証明書・セキュリティヘッダ)', steps: [['curl', '-I', '/']] },
-  { id: 'web.exposed', kind: ['web'], label: '出てはいけないファイル', steps: [['curl', '-I', '/.git/HEAD'], ['curl', '-I', '/.env'], ['curl', '-I', '/wp-config.php.bak'], ['curl', '-I', '/backup.zip'], ['curl', '-I', '/phpinfo.php'], ['curl', '-I', '/.DS_Store'], ['curl', '-I', '/wp-login.php'], ['curl', '-I', '/administrator/'], ['curl', '-I', '/phpmyadmin/']] },
-  { id: 'web.robots', kind: ['web'], label: 'robots と目印', steps: [['curl', '/robots.txt'], ['curl', '-I', '/readme.html'], ['curl', '-I', '/wp-json/']] },
-  { id: 'network.show', kind: ['network'], label: 'ネットワーク機器の版と設定 (show)', steps: [['show', 'version'], ['show', 'running-config']] },
+  { id: 'web.head', kind: ['web'], label: '応答とヘッダ (証明書・セキュリティヘッダ)', steps: [['curl', '-I', '-v', '/']] },
+  { id: 'web.redirect', kind: ['web'], label: 'http で来た人を https へ誘導しているか', steps: [['curl', '-I', '--plain-http', '/']] },
+  // トップページの中身は毎回少しずつ変わる (日時・トークン) ので生の差分は取らず、構造 (外部スクリプト・送り先・証明書・向き先) の変化で比べる (digest)
+  { id: 'web.home', kind: ['web'], label: 'トップページの中身 (改ざんの痕跡・外部への送り先・検索エンジン向けの偽装)', nodiff: true, steps: [['curl', '/'], ['curl', '-A', 'googlebot', '/']] },
+  { id: 'web.dns', kind: ['web'], label: 'DNS (名前の向き先・なりすましメール対策 SPF/DMARC)', steps: [['dig', '+short', 'A', '{host}'], ['dig', '+short', 'NS', '{apex}'], ['dig', '+short', 'MX', '{apex}'], ['dig', '+short', 'TXT', '{apex}'], ['dig', '+short', 'TXT', '_dmarc.{apex}'], ['dig', '+short', 'CAA', '{apex}']] },
+  { id: 'web.exposed', kind: ['web'], label: '出てはいけないファイル・開けてはいけない場所', steps: [['curl', '-I', '/mamoricho-check-this-page-should-not-exist'], ['curl', '-I', '/.git/HEAD'], ['curl', '-I', '/.git/config'], ['curl', '-I', '/.env'], ['curl', '-I', '/.htpasswd'], ['curl', '-I', '/wp-config.php.bak'], ['curl', '-I', '/config.php.bak'], ['curl', '-I', '/backup.zip'], ['curl', '-I', '/backup.tar.gz'], ['curl', '-I', '/dump.sql'], ['curl', '-I', '/db.sql'], ['curl', '-I', '/id_rsa'], ['curl', '-I', '/.aws/credentials'], ['curl', '-I', '/phpinfo.php'], ['curl', '-I', '/.DS_Store'], ['curl', '-I', '/wp-content/debug.log'], ['curl', '-I', '/server-status'], ['curl', '-I', '/wp-login.php'], ['curl', '-I', '/administrator/'], ['curl', '-I', '/phpmyadmin/'], ['curl', '-I', '/xmlrpc.php'], ['curl', '-I', '/wp-json/wp/v2/users']] },
+  { id: 'web.robots', kind: ['web'], label: 'robots・security.txt・版の目印', steps: [['curl', '/robots.txt'], ['curl', '/.well-known/security.txt'], ['curl', '-I', '/readme.html'], ['curl', '-I', '/wp-json/']] },
+  // ネットワーク機器は機種で命令が違う (Cisco 系 running-config / YAMAHA config / Fortigate system status)。無い命令は「この機械には無い」で済む
+  { id: 'network.show', kind: ['network'], label: 'ネットワーク機器の版と設定 (show)', steps: [['show', 'version'], ['show', 'running-config'], ['show', 'config'], ['show', 'system', 'status']] },
+  { id: 'network.state', kind: ['network'], label: 'ネットワーク機器の状態 (利用者・インターフェース・時刻・ログ)', steps: [['show', 'users'], ['show', 'ip', 'interface', 'brief'], ['show', 'clock'], ['show', 'environment'], ['show', 'logging']] },
   // ---- 初動 (有事) 向け。消えやすい順に読む。平時の記録があれば、前回との差分が出る
   { id: 'linux.processes', kind: ['ssh'], label: '動いているプロセス', incident: true, steps: [['ps', 'auxww']] },
   { id: 'linux.connections', kind: ['ssh'], label: '通信の相手 (つながっている先)', incident: true, steps: [['ss', '-tnpH', 'state', 'established'], ['netstat', '-tn']] },
@@ -58,10 +64,11 @@ export const COMPROMISE_SET = ['linux.trojan', 'linux.processes', 'linux.connect
 // まとめて診断 = 対象のふつうの型 (ボタンの並び) + 兆候のセット。1 回でスナップショットを作り、前回と比べる
 export const FULL_SET = [...new Set([...TEMPLATES.filter(t => t.kind.includes('ssh') && !t.incident).map(t => t.id), ...COMPROMISE_SET])];
 export const SETS = {
-  full: { label: 'まとめて診断', ids: FULL_SET, signs: true, note: 'ふつうの点検の型と、乗っ取りの兆候のセットを 1 回で流し、スナップショットとして残します' },
-  compromise: { label: '乗っ取り・トロイの木馬の兆候', ids: COMPROMISE_SET, signs: true, note: 'よくある手口の痕跡を読むだけで探します。見つからなくても安全とは言えません' },
-  incident: { label: '初動セット', ids: INCIDENT_SET, signs: true, note: '消えやすいものから順に読み、前回との差分を先に出します' },
+  full: { label: 'まとめて診断', kinds: ['ssh', 'web', 'network'], ids: (kind) => (kind === 'ssh' ? FULL_SET : TEMPLATES.filter(t => t.kind.includes(kind) && !t.incident).map(t => t.id)), signs: true, note: 'その対象のすべての型を 1 回で流し、兆候の目安をつけてスナップショットとして残します' },
+  compromise: { label: '乗っ取り・トロイの木馬の兆候', kinds: ['ssh'], ids: () => COMPROMISE_SET, signs: true, note: 'よくある手口の痕跡を読むだけで探します。見つからなくても安全とは言えません' },
+  incident: { label: '初動セット', kinds: ['ssh'], ids: () => INCIDENT_SET, signs: true, note: '消えやすいものから順に読み、前回との差分を先に出します' },
 };
+export const setIds = (set, kind) => (SETS[set] && SETS[set].kinds.includes(kind) ? SETS[set].ids(kind) : []);
 const SIGN_RULES_NOTE = '機械的な目安です。見つからなくても「安全」という意味ではありません (巧妙なものは隠れます・ここで分かるのは一部です)。見つかったものも、正規の運用で説明がつくことがあります';
 const BAD_NAMES = /\b(xmrig|kdevtmpfsi|kinsing|minerd|cryptonight|xmr-stak|cpuminer|tsunami|watchbog|sustes|kworkerds|bioset|\.x)\b/i;
 const TMP_PATH = /(^|\s)(\/tmp\/|\/var\/tmp\/|\/dev\/shm\/)/;
@@ -69,6 +76,110 @@ const BAD_PORTS = new Set(['4444', '1337', '31337', '6667', '6697', '3333', '144
 const stepsOf = (sections, template_id, pick) => (sections.find(s => s.template_id === template_id)?.results || sections.find(s => s.template_id === template_id)?.steps || []).filter(x => !pick || pick(x));
 // 兆候の判定は標準出力だけを見る (エラー出力は「読めなかった」の知らせで、痕跡ではない)
 const linesOf = (x) => String(x?.output || '').split(STDERR_MARK)[0].split('\n').map(l => l.trim()).filter(l => l && l !== NO_OUTPUT && !/^(\/usr\/bin\/)?(find|ls|cat|grep|lsattr|lsmod|getent|awk|ps|ss|netstat|sudo): /.test(l) && !/^ERROR: ld\.so/.test(l));
+// ---- 公開 HP: 読んだ応答の整理 (digest) と兆候 ----
+const statusOf = (out) => { const m = String(out || '').match(/^HTTP\/[\d.]+\s+(\d{3})/m); return m ? Number(m[1]) : null; };
+const headersOf = (out) => { const h = {}; for (const l of String(out || '').split(STDERR_MARK)[0].split('\n')) { const m = l.match(/^([A-Za-z0-9-]+):\s*(.*)$/); if (m) h[m[1].toLowerCase()] = (h[m[1].toLowerCase()] ? h[m[1].toLowerCase()] + ', ' : '') + m[2].trim(); } return h; };
+const hostOf = (u) => { const m = String(u || '').match(/^(?:https?:)?\/\/([^/:?#]+)/i); return m ? m[1].toLowerCase() : null; };
+const isOwnHost = (h, host) => { if (!h) return true; const apex = String(host).replace(/^www\./, '').toLowerCase(); h = h.toLowerCase(); return h === host.toLowerCase() || h === apex || h.endsWith('.' + apex); };
+const bodyOf = (x) => String(x?.output || '').split(STDERR_MARK)[0];
+const titleOf = (html) => (String(html).match(/<title[^>]*>([^<]{0,200})<\/title>/i)?.[1] || '').replace(/\s+/g, ' ').trim();
+const attrs = (html, tag, attr) => [...String(html).matchAll(new RegExp(`<${tag}\\b[^>]*?\\s${attr}\\s*=\\s*["']?([^"'\\s>]+)`, 'gi'))].map(m => m[1]);
+const SPAM = /viagra|cialis|casino|カジノ|スーパーコピー|ブランドコピー|偽ブランド|replica (?:watches|bags)|出会い系|闇金|オンラインカジノ|payday loan/i;
+// curl -v の証明書の行 (*  expire date: Oct  8 00:00:00 2026 GMT)
+const certOf = (out) => { const err = String(out || '').split(STDERR_MARK)[1] || ''; const g = (k) => err.match(new RegExp(`^\\*\\s+${k}:\\s*(.+)$`, 'm'))?.[1]?.trim() || null; const exp = g('expire date'); let days = null; if (exp) { const m = exp.match(/^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})\s+(\d{4})\s+GMT$/); const d = m ? new Date(`${m[1]} ${m[2]}, ${m[4]} ${m[3]} GMT`) : new Date(exp); if (!isNaN(d)) days = Math.floor((d - Date.now()) / 86400e3); } return (exp || g('issuer')) ? { issuer: g('issuer'), subject: g('subject'), expire: exp, days_left: days } : null; };
+export function webDigest(sections, host) {
+  const head = stepsOf(sections, 'web.head')[0]; const home = stepsOf(sections, 'web.home', x => !x.argv?.includes('-A'))[0]; const html = bodyOf(home);
+  const h = headersOf(head?.output); const ext = (list) => [...new Set(list.map(hostOf).filter(x => x && !isOwnHost(x, host)))].sort();
+  const dns = (type, name) => stepsOf(sections, 'web.dns', x => x.argv?.[2] === type && x.argv?.[3] === name).flatMap(linesOf).map(l => l.replace(/"/g, '')).sort();
+  return { status: statusOf(head?.output), title: titleOf(html), body_len: html.length, scripts_ext: ext(attrs(html, 'script', 'src')), iframes: attrs(html, 'iframe', 'src').slice(0, 20), forms_ext: ext(attrs(html, 'form', 'action')), meta_refresh: (html.match(/<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*>/i)?.[0] || '').slice(0, 200) || null, cert: certOf(head?.output), server: h.server || null, powered: h['x-powered-by'] || null, a: dns('A', '{host}'), ns: dns('NS', '{apex}'), mx: dns('MX', '{apex}') };
+}
+// 2 つの digest の違い (構造の変化)
+export function digestDiff(a, b) {
+  if (!a || !b) return [];
+  const out = []; const arr = (k, label) => { const A = new Set(a[k] || []), B = new Set(b[k] || []); const add = [...B].filter(x => !A.has(x)), rem = [...A].filter(x => !B.has(x)); if (add.length || rem.length) out.push({ key: k, label, added: add, removed: rem }); };
+  const val = (k, label, f = (x) => x) => { const va = f(a[k]), vb = f(b[k]); if (String(va ?? '') !== String(vb ?? '')) out.push({ key: k, label, from: va ?? null, to: vb ?? null }); };
+  val('title', 'タイトル'); val('status', '応答コード'); arr('scripts_ext', '外部から読み込むスクリプトの置き場'); arr('forms_ext', '入力フォームの送り先 (外部)'); arr('iframes', '埋め込み (iframe)'); val('meta_refresh', '自動の転送 (meta refresh)');
+  val('cert', '証明書の発行者', (c) => c?.issuer); val('server', 'サーバーの名乗り'); arr('a', '名前の向き先 (A)'); arr('ns', 'ネームサーバー (NS)'); arr('mx', 'メールの受け口 (MX)');
+  return out;
+}
+const WEB_NOTE = '外から見える範囲 (トップページ・決まった場所・DNS) だけの機械的な目安です。見つからなくても「安全」という意味ではありません (中身の改ざんは巧妙に隠れますし、ログインの先は見ていません)。見つかったものも、正規の設定で説明がつくことがあります';
+export function webSigns(sections, { host, digest, prevDigest = null } = {}) {
+  const signs = []; const add = (level, label, why, lines, template_id) => { if (lines.length) signs.push({ level, label, why, lines: lines.slice(0, 20), count: lines.length, template_id }); };
+  const d = digest || webDigest(sections, host);
+  // 無いページにも 200 を返す HP では、ファイルの有無が判定できない
+  const canary = stepsOf(sections, 'web.exposed', x => /should-not-exist/.test(x.argv?.at(-1) || ''))[0]; const catchAll = canary && statusOf(canary.output) === 200;
+  const ex = stepsOf(sections, 'web.exposed', x => !/should-not-exist/.test(x.argv?.at(-1) || '')).map(x => ({ path: x.argv.at(-1), status: statusOf(x.output) })).filter(x => x.status);
+  const SECRET = /\.(git|env|htpasswd|aws|DS_Store)|\.bak$|backup\.|\.sql$|id_rsa|phpinfo|debug\.log|server-status/;
+  if (catchAll) add('check', '無いページにも 200 を返す HP (ファイルの有無を外から判定できない)', '「出てはいけないファイル」の判定はこの HP では効きません。公開フォルダの中身は、サーバー側で直接確かめてください', ['/mamoricho-check-this-page-should-not-exist → 200'], 'web.exposed');
+  else {
+    add('warn', '外から見えてはいけないファイルが見える', 'ソース管理の中身・設定・バックアップ・鍵・phpinfo は、パスワードやデータベースの接続情報を含むことが多く、乗っ取りの入口になります。すぐに消すか、外から見えないようにしてください', ex.filter(x => x.status === 200 && SECRET.test(x.path)).map(x => `${x.path} → 200`), 'web.exposed');
+    add('check', '管理画面・API が誰でも開ける', 'ログイン画面や API が全世界に開いていると、総当たりや既知の穴の的になります。社内や VPN からだけにするか、多要素認証を', ex.filter(x => (x.status === 200 || x.status === 405) && /wp-login|administrator|phpmyadmin|xmlrpc|wp\/v2\/users/.test(x.path)).map(x => `${x.path} → ${x.status}`), 'web.exposed');
+  }
+  // 証明書
+  if (d.cert?.days_left != null) { if (d.cert.days_left < 7) add('warn', d.cert.days_left < 0 ? '証明書の期限が切れている' : '証明書の期限が 7 日以内', '期限が切れるとブラウザが警告を出し、お客様が離れます。自動更新が止まっていないか確かめてください', [`期限: ${d.cert.expire} (残り ${d.cert.days_left} 日)`], 'web.head'); else if (d.cert.days_left < 30) add('check', '証明書の期限が 30 日以内', '自動更新なら問題ありません。手動なら、更新の予定を', [`期限: ${d.cert.expire} (残り ${d.cert.days_left} 日)`], 'web.head'); }
+  if (prevDigest?.cert?.issuer && d.cert?.issuer && prevDigest.cert.issuer !== d.cert.issuer) add('check', '証明書の発行者が前回と違う', '発行元を変えた覚えが無ければ、名前の乗っ取りやサーバーのすり替えのおそれ', [`前回: ${prevDigest.cert.issuer}`, `今回: ${d.cert.issuer}`], 'web.head');
+  // ヘッダ
+  const head = stepsOf(sections, 'web.head')[0]; const h = headersOf(head?.output);
+  if (head && statusOf(head.output)) {
+    const miss = []; if (!h['strict-transport-security']) miss.push('Strict-Transport-Security (https を強制)'); if (!h['x-content-type-options']) miss.push('X-Content-Type-Options: nosniff'); if (!h['content-security-policy'] && !h['x-frame-options']) miss.push('X-Frame-Options か Content-Security-Policy (別サイトへの埋め込みを防ぐ)');
+    add('check', 'セキュリティのヘッダが足りない', '無くてもすぐ乗っ取られるわけではありませんが、クリックジャッキングや混在コンテンツを防ぐ基本の設定です。ホスティングの設定で足せます', miss, 'web.head');
+    const ver = [h.server, h['x-powered-by']].filter(Boolean).filter(v => /\d+\.\d+/.test(v));
+    add('check', 'サーバーやアプリの版が外に見えている', '版が分かると、その版の既知の穴を狙われやすくなります。版の表示を消す設定を', ver.map(v => v.slice(0, 80)), 'web.head');
+  }
+  // http → https
+  const rd = stepsOf(sections, 'web.redirect')[0];
+  if (rd && statusOf(rd.output)) { const st = statusOf(rd.output); const loc = headersOf(rd.output).location || ''; if (!([301, 302, 307, 308].includes(st) && /^https:/i.test(loc))) add('check', 'http で来た人を https へ誘導していない', 'http のままだと通信を盗み見・書き換えされます。http → https の転送 (301) を', [`http://${host}/ → ${st}${loc ? ' Location: ' + loc.slice(0, 80) : ''}`], 'web.redirect'); }
+  // トップページの中身
+  const home = stepsOf(sections, 'web.home', x => !x.argv?.includes('-A'))[0]; const bot = stepsOf(sections, 'web.home', x => x.argv?.includes('googlebot'))[0];
+  const html = bodyOf(home), bhtml = bodyOf(bot);
+  if (html) {
+    const bad = [];
+    if (/eval\s*\(\s*(unescape|atob)\s*\(/i.test(html)) bad.push('eval(unescape/atob(…)) (難読化したスクリプトの実行)');
+    if ((html.match(/String\.fromCharCode\s*\(/g) || []).length >= 5) bad.push('String.fromCharCode の多用 (文字コードで隠した文字列)');
+    if (/document\.write\s*\(\s*unescape\s*\(/i.test(html)) bad.push('document.write(unescape(…))');
+    if (/<script[^>]*>[^<]*[A-Za-z0-9+/=]{400,}/i.test(html)) bad.push('スクリプト内の長い base64 (400 文字以上)');
+    for (const m of html.matchAll(/<iframe\b[^>]*>/gi)) if (/display\s*:\s*none|visibility\s*:\s*hidden|width\s*=\s*["']?0|height\s*=\s*["']?0|width\s*:\s*0|height\s*:\s*0/i.test(m[0])) bad.push(`隠した iframe: ${m[0].slice(0, 120)}`);
+    if (d.meta_refresh && !isOwnHost(hostOf(d.meta_refresh.match(/url\s*=\s*["']?([^"'\s>]+)/i)?.[1]), host)) bad.push(`外部への自動転送: ${d.meta_refresh.slice(0, 120)}`);
+    add('warn', '改ざんされた HP によく見る書き方がトップページにある', '難読化したスクリプト・隠した iframe・外部への自動転送は、訪問者を偽サイトやマルウェアへ送る改ざんの典型。心当たりが無ければ、ホスティングのバックアップと見比べてください', bad, 'web.home');
+    const spam = [...new Set([...(html.match(SPAM) || []), ...(bhtml.match(SPAM) || [])])];
+    add('warn', 'スパムの文言 (乗っ取られた HP によく出る) がトップページにある', '薬・カジノ・偽ブランドの文言は、検索エンジン向けのスパムを仕込まれた HP の典型', spam.map(w => `「${w}」`), 'web.home');
+    add('warn', '入力フォームの送り先が外部のサーバー', '問い合わせやカード入力のフォームが外部へ送られているなら、入力の横取り (スキミング) のおそれ。外部のフォームサービスを使っているなら、その名前か確かめてください', d.forms_ext, 'web.home');
+    if (bhtml && statusOf(home?.output) !== 403) {
+      const t1 = d.title, t2 = titleOf(bhtml); const r = bhtml.length / Math.max(1, html.length); const spamOnlyBot = !SPAM.test(html) && SPAM.test(bhtml);
+      const why = []; if (t1 && t2 && t1 !== t2) why.push(`タイトルが違う: 「${t1.slice(0, 40)}」 / 検索エンジン向け「${t2.slice(0, 40)}」`); if (r > 2 || r < 0.5) why.push(`大きさが大きく違う: ${html.length} 文字 / 検索エンジン向け ${bhtml.length} 文字`); if (spamOnlyBot) why.push('検索エンジン向けにだけスパムの文言');
+      add('warn', '検索エンジン (Googlebot) にだけ別の内容を見せている (クローキング)', '乗っ取られた HP は、人には普通のページを、検索エンジンにはスパムを見せることがあります。訪問者には見えないので気づきにくい手口です', why, 'web.home');
+    }
+    add('check', 'https のページに http の部品が混ざっている (混在コンテンツ)', 'http で読む画像やスクリプトは途中で差し替えられるおそれがあり、ブラウザも警告します', [...new Set([...html.matchAll(/\s(?:src|href)\s*=\s*["']http:\/\/[^"'\s>]+/gi)].map(m => m[0].trim().slice(0, 100)))].slice(0, 10), 'web.home');
+    if (prevDigest) { const ns = d.scripts_ext.filter(x => !(prevDigest.scripts_ext || []).includes(x)); const nf = d.forms_ext.filter(x => !(prevDigest.forms_ext || []).includes(x)); add('warn', '前回より増えた、外部スクリプトの置き場・フォームの送り先', '知らないうちに外部スクリプトが増えるのは、入力の横取り (Magecart 型) の典型。自分で足したものか確かめてください', [...ns.map(x => `スクリプト: ${x}`), ...nf.map(x => `フォーム: ${x}`)], 'web.home'); }
+    else add('check', '外部から読み込んでいるスクリプトの置き場 (次回から、増えたら知らせます)', '外部スクリプトは便利ですが、その置き場が乗っ取られると HP ごと巻き込まれます。知っているものか確かめてください', d.scripts_ext, 'web.home');
+  }
+  // DNS
+  const txt = stepsOf(sections, 'web.dns', x => x.argv?.[2] === 'TXT' && x.argv?.[3] === '{apex}').flatMap(linesOf); const dm = stepsOf(sections, 'web.dns', x => x.argv?.[3] === '_dmarc.{apex}').flatMap(linesOf); const mx = d.mx;
+  const dnsRan = stepsOf(sections, 'web.dns').some(x => x.exit_code === 0);
+  // 「0 .」はメールを受けない宣言 (null MX) なので、SPF/DMARC は求めない
+  if (dnsRan && mx.filter(m => !/^0 \.?$/.test(m)).length) { if (!txt.some(l => /v=spf1/i.test(l))) add('check', 'なりすましメール対策 SPF が無い', 'このドメイン名義の偽メールを相手に見分けてもらうための DNS の記述です。メールの管理会社の手順で足せます', [`${host.replace(/^www\./, '')} の TXT に v=spf1 が無い`], 'web.dns'); if (!dm.some(l => /v=DMARC1/i.test(l))) add('check', 'なりすましメール対策 DMARC が無い', 'SPF/DKIM に合わないメールの扱いを受け手に伝える記述です。まず p=none で様子見から', [`_dmarc.${host.replace(/^www\./, '')} の TXT に v=DMARC1 が無い`], 'web.dns'); }
+  if (prevDigest?.a?.length && d.a.length && !d.a.some(x => prevDigest.a.includes(x))) add('warn', 'HP の名前の向き先 (A レコード) が前回と全部違う', 'サーバーを移した覚えが無ければ、DNS の乗っ取りのおそれ。登録事業者の管理画面を確かめてください', [`前回: ${prevDigest.a.join(', ')}`, `今回: ${d.a.join(', ')}`], 'web.dns');
+  if (prevDigest?.ns?.length && d.ns.length && !d.ns.some(x => prevDigest.ns.includes(x))) add('warn', 'ネームサーバー (NS) が前回と全部違う', '移管した覚えが無ければ、ドメインの乗っ取りのおそれ', [`前回: ${prevDigest.ns.join(', ')}`, `今回: ${d.ns.join(', ')}`], 'web.dns');
+  signs.sort((a, b) => (a.level === b.level ? 0 : a.level === 'warn' ? -1 : 1));
+  return { title: '改ざん・乗っ取り・設定の不備の兆候', signs, note: WEB_NOTE, warn: signs.filter(x => x.level === 'warn').length, check: signs.filter(x => x.level === 'check').length };
+}
+// ---- ネットワーク機器: 設定の写しに対する兆候 (Cisco 系 / YAMAHA の書き方) ----
+const NET_NOTE = '設定の写し (show) に対する機械的な目安です。機種によって書き方が違うので、拾えないものもあります。本当の守りは「設定が前回から変わっていないか」の差分です';
+export function networkSigns(sections) {
+  const signs = []; const add = (level, label, why, lines, template_id) => { if (lines.length) signs.push({ level, label, why, lines: lines.slice(0, 20), count: lines.length, template_id }); };
+  const cfg = stepsOf(sections, 'network.show', x => /config/.test(x.argv?.join(' ') || '')).flatMap(linesOf);
+  if (!cfg.length) return { title: '設定の不備・変化の兆候', signs, note: NET_NOTE, warn: 0, check: 0 };
+  add('warn', 'SNMP のコミュニティ名が既定 (public / private)', '誰でも機器の情報を読めたり (private なら書き換えも) します。別の名前にするか、SNMPv3 に', cfg.filter(l => /snmp(-server)?\s+community\s+(public|private)\b/i.test(l)), 'network.show');
+  add('warn', 'telnet (暗号化なし) で管理できる', 'パスワードが平文で流れます。ssh だけにしてください', cfg.filter(l => /transport input (telnet|all)|telnetd (service|host) (on|any)|^\s*telnet\b/i.test(l)), 'network.show');
+  add('warn', '管理者のパスワードが平文か、戻せる形 (type 7) で書かれている', '設定の写しを見た人に分かってしまいます。enable secret / service password-encryption / type 8・9 に', cfg.filter(l => /^\s*enable password\s|password 7 |password 0 |no service password-encryption/i.test(l)).map(l => l.replace(/(password \d?\s*)\S+/, '$1<伏せ字>')), 'network.show');
+  add('warn', 'ssh の古い版 (version 1) を許している', '既知の弱点があります。version 2 だけに', cfg.filter(l => /ip ssh version 1\b/i.test(l)), 'network.show');
+  add('check', '暗号化なしの http で管理画面を開いている', 'https (secure-server) だけにするか、管理は社内からだけに', cfg.filter(l => /^\s*ip http server\b|httpd service on/i.test(l) && !/secure/.test(l)), 'network.show');
+  if (!cfg.some(l => /logging (host|server|\d+\.\d+)|syslog (host|server)/i.test(l))) add('check', 'ログの送り先 (syslog) が無い', '機器の中のログは再起動で消えます。言箱や別のサーバーへ送る設定を', ['logging host / syslog host の行が無い'], 'network.show');
+  if (!cfg.some(l => /ntp (server|peer)|ntpdate|sntp/i.test(l))) add('check', '時刻合わせ (NTP) が無い', 'ログの時刻が狂うと、もしものときに突き合わせできません', ['ntp server の行が無い'], 'network.show');
+  add('check', '誰でもつなげる管理の許可 (0.0.0.0 any / permit any)', '管理のアクセス元を社内の範囲に絞ってください', cfg.filter(l => /access-class|permit (ip )?any any|permit any\b/i.test(l) && /any/.test(l)).slice(0, 5), 'network.show');
+  signs.sort((a, b) => (a.level === b.level ? 0 : a.level === 'warn' ? -1 : 1));
+  return { title: '設定の不備・変化の兆候', signs, note: NET_NOTE, warn: signs.filter(x => x.level === 'warn').length, check: signs.filter(x => x.level === 'check').length };
+}
 // 乗っ取り・トロイの木馬の兆候 (読んだ出力への機械的な目安)。warn = 説明がつかなければ疑う、check = 正規の運用でも出るので確かめる
 export function compromiseSigns(sections) {
   const signs = []; const add = (level, label, why, lines, template_id) => { if (lines.length) signs.push({ level, label, why, lines: lines.slice(0, 20), count: lines.length, template_id }); };
@@ -105,7 +216,7 @@ export function compromiseSigns(sections) {
   // 見慣れない場所の SUID
   add('check', '見慣れない場所にある SUID プログラム', 'root の権限で動くプログラムです。/usr/bin などの定位置以外にあるのは珍しく、権限昇格の裏口のことがあります', stepsOf(sections, 'linux.suid').flatMap(linesOf).filter(l => l.startsWith('/') && !/^\/(usr\/)?(bin|sbin|lib|lib32|lib64|libexec|snap|opt|var\/lib\/snapd)\//.test(l)), 'linux.suid');
   signs.sort((a, b) => (a.level === b.level ? 0 : a.level === 'warn' ? -1 : 1));
-  return { signs, note: SIGN_RULES_NOTE, warn: signs.filter(x => x.level === 'warn').length, check: signs.filter(x => x.level === 'check').length };
+  return { title: '乗っ取り・トロイの木馬の兆候', signs, note: SIGN_RULES_NOTE, warn: signs.filter(x => x.level === 'warn').length, check: signs.filter(x => x.level === 'check').length };
 }
 // 手順の半分以上 (3 つ以上) に同じ「増えた行」(または「消えた行」) があれば、それは 1 つの手順の変化ではなく機械全体の異常 (壊れた preload が全コマンドに出す ERROR など)。
 // 抜き出して返し、各手順の差分からは外す (steps の diff を書き換える)。増えた側が警告、消えた側は「前回の異常が消えた」の知らせ
@@ -124,8 +235,11 @@ export function splitCommonLines(steps) {
 export const splitCommonAdded = (steps) => splitCommonLines(steps).added;
 // ps aux の行は、PID・CPU・メモリ・開始時刻・経過時間の列を落として「利用者 + コマンド」で比べる (毎回変わる数字で差分が埋まらないように)
 const PS_LINE = /^(\S+)\s+\d+\s+[\d.]+\s+[\d.]+\s+\d+\s+\d+\s+\S+\s+\S+\s+\S+\s+[\d:.]+\s+(.*)$/;
+// HTTP の応答で毎回変わるヘッダ (日時・CDN の追跡 id・cookie・キャッシュの印)。curl -v の echo (< / >) にも同じものが出る
+const VOLATILE_HEADER = /^(?:[<>]\s*)?(date|cf-ray|set-cookie|report-to|nel|age|expires|etag|last-modified|x-request-id|x-amz-cf-id|x-amz-request-id|x-amz-cf-pop|server-timing|cf-cache-status|x-cache|x-cache-hits|via|x-served-by|x-timer|content-length|x-runtime|x-trace-id|traceparent|x-correlation-id|keep-alive):/i;
 export function diffLines(prev, cur) {
-  const norm = (l) => PS_LINE.test(l) ? l.replace(PS_LINE, '$1 <ps> $2') : l.replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?\b/g, '<時刻>').replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<時刻>').replace(/\b(pid=|users:\(\("[^"]+",pid=)\d+/g, '$1<pid>').replace(/\/proc\/\d+\//g, '/proc/<pid>/').replace(/:(3276[89]|327[7-9]\d|32[89]\d{2}|3[3-9]\d{3}|[4-5]\d{4}|6[0-5]\d{3})\b/g, ':<一時ポート>').replace(/\s+/g, ' ').trim();
+  const norm = (raw) => { const l = raw.replace(/\r$/, ''); return norm1(l); }; // HTTP の行末の CR は落とす ($ が効かず、可変ヘッダの正規化が外れていた)
+  const norm1 = (l) => PS_LINE.test(l) ? l.replace(PS_LINE, '$1 <ps> $2') : VOLATILE_HEADER.test(l) ? l.replace(VOLATILE_HEADER, '$1:').replace(/:.*$/, ': <可変>') : /^[{}] \[\d+ bytes data\]$/.test(l) ? '<curl の通信の断片>' : /^\*\s+(Connected to|IPv[46]:|Host .* was resolved|Trying )/.test(l) ? l.replace(/\s+/g, ' ').replace(/\(?\d+\.\d+\.\d+\.\d+\)?|\[[0-9a-f:.]+\]|(?:[0-9a-f]{0,4}:){2,}[0-9a-f]{0,4}/gi, '<住所>') : l.replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?\b/g, '<時刻>').replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<時刻>').replace(/\b(pid=|users:\(\("[^"]+",pid=)\d+/g, '$1<pid>').replace(/\/proc\/\d+\//g, '/proc/<pid>/').replace(/:(3276[89]|327[7-9]\d|32[89]\d{2}|3[3-9]\d{3}|[4-5]\d{4}|6[0-5]\d{3})\b/g, ':<一時ポート>').replace(/\s+/g, ' ').trim();
   // 「(出力なし)」は出力が無かった目印で、行ではない (前回が空・今回にエラー行だけ、で「消えた 1」と出ていた)
   const a = new Map(); for (const l of String(prev || '').split('\n')) { const k = norm(l); if (k && k !== NO_OUTPUT) a.set(k, (a.get(k) || 0) + 1); }
   const b = new Map(); for (const l of String(cur || '').split('\n')) { const k = norm(l); if (k && k !== NO_OUTPUT) b.set(k, (b.get(k) || 0) + 1); }
@@ -292,7 +406,7 @@ export class Mamoricho {
     for (const { argv, root, needs_root } of plan) {
       if (needs_root) { results.push({ argv, needs_root: true, error: 'root の権限が要ります (登録時に「root の読み取りも許す」を選んだ対象だけ読めます)' }); continue; }
       try {
-        const prev = this.probe.previousOutput(target_id, template_id, argv); // 走らせる前に「前回」を取る (今回を混ぜない)
+        const prev = tpl.nodiff ? null : this.probe.previousOutput(target_id, template_id, argv); // 走らせる前に「前回」を取る (今回を混ぜない)。nodiff の型は構造 (digest) で比べる
         const r = await this.probe.run(actor, { target_id, argv, template_id, explanation: tpl.label });
         // 前回は記録に残した長さ (OUTPUT_KEEP) で切れているので、今回も同じ長さで比べる (全文と比べると切れた先が全部「増えた」になる)
         const truncated = r.output.length > OUTPUT_KEEP;
@@ -318,9 +432,10 @@ export class Mamoricho {
     requireRole(actor, 'operator'); if (!this.probe) throw new HttpError(503, 'no_probe', '調査の仕組みがありません');
     const def = SETS[set]; if (!def) throw new HttpError(400, 'bad_set', 'セットは full / compromise / incident のどれかです');
     const t = this.probe.getTarget(target_id); if (!t) throw new HttpError(404, 'not_found', '対象が見つかりません');
-    if (t.kind !== 'ssh') throw new HttpError(400, 'bad_kind', `${def.label}はサーバー・PC (SSH) の対象向けです`);
+    if (!def.kinds.includes(t.kind)) throw new HttpError(400, 'bad_kind', `${def.label}は ${def.kinds.includes('web') ? 'この種類の対象' : 'サーバー・PC (SSH)'} の対象向けです`);
+    const prevSnap = this.snapshots(actor, { target_id, limit: 1 }).find(x => x.comparable); const prevDigest = prevSnap ? (this.snapshot(actor, prevSnap.id).digest || null) : null;
     const sections = []; let baseline = false;
-    for (const tid of def.ids) {
+    for (const tid of def.ids(t.kind)) {
       const tpl = TEMPLATES.find(x => x.id === tid); if (!tpl) continue;
       try { const r = await this.runTemplate(actor, { target_id, template_id: tid, record: false }); for (const x of r.results) if (x.diff) baseline = true; sections.push({ template_id: tid, label: tpl.label, results: r.results }); }
       catch (e) { sections.push({ template_id: tid, label: tpl.label, error: e.message, results: [] }); }
@@ -328,13 +443,16 @@ export class Mamoricho {
     // どの手順にも出る「増えた行」は、1 つの手順の変化ではなく機械全体の異常 (例: 壊れた ld.so.preload が全コマンドに出す ERROR)。1 か所にまとめ、各手順からは外す
     const common = splitCommonLines(sections.flatMap(sec => sec.results.filter(x => x.diff)));
     const summary = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, steps: sec.results.length, ok: sec.results.filter(x => x.exit_code === 0).length, needs_root: sec.results.filter(x => x.needs_root || x.stale_sudoers).length, failed: sec.results.filter(x => x.error || (x.exit_code && x.exit_code !== 0)).length, added: sec.results.reduce((n, x) => n + (x.diff?.added_count || 0), 0), removed: sec.results.reduce((n, x) => n + (x.diff?.removed_count || 0), 0) }));
-    const signs = def.signs ? compromiseSigns(sections) : null;
+    const digest = t.kind === 'web' ? webDigest(sections, t.host) : null;
+    if (digest && prevDigest) baseline = true;
+    const signs = !def.signs ? null : t.kind === 'web' ? webSigns(sections, { host: t.host, digest, prevDigest }) : t.kind === 'network' ? networkSigns(sections) : compromiseSigns(sections);
+    const digest_diff = digest && prevDigest ? digestDiff(prevDigest, digest) : [];
     const totals = { steps: summary.reduce((n, x) => n + x.steps, 0), ok: summary.reduce((n, x) => n + x.ok, 0), needs_root: summary.reduce((n, x) => n + x.needs_root, 0), failed: summary.reduce((n, x) => n + x.failed, 0), added: summary.reduce((n, x) => n + x.added, 0), removed: summary.reduce((n, x) => n + x.removed, 0), warn: signs?.warn || 0, check: signs?.check || 0 };
     // 記録には出力そのものは持たず (probe_runs にある)、手順ごとの run_id と差分の行 (40 行まで) を持つ。履歴の画面はこれで前回との変化を再現し、出力は run_id で読む
     const stored = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, error: sec.error || null, steps: sec.results.map(x => ({ argv: x.argv, run_id: x.run_id || null, exit_code: x.exit_code ?? null, root: !!x.root, needs_root: !!x.needs_root, stale_sudoers: !!x.stale_sudoers, partial: !!x.partial, error: x.error || null, added_count: x.diff?.added_count ?? null, removed_count: x.diff?.removed_count ?? null, added: (x.diff?.added || []).slice(0, 40), removed: (x.diff?.removed || []).slice(0, 40), previous_at: x.diff?.previous_at || null, truncated: !!x.diff?.truncated })) }));
-    const rec = this.record(actor, 'snapshot', { set, set_label: def.label, target_id, target_name: t.name, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), signs, totals, sections: stored });
+    const rec = this.record(actor, 'snapshot', { set, set_label: def.label, target_id, target_name: t.name, target_kind: t.kind, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), signs, totals, digest, digest_diff, sections: stored });
     audit({ actor, action: 'mamoricho.set_run', target: target_id, detail: { record: rec.id, set, baseline, added: totals.added, warn: totals.warn, check: totals.check } });
-    return { record_id: rec.id, at: rec.at, set, set_label: def.label, target: { id: t.id, name: t.name }, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), signs, totals, sections, summary, note: baseline ? '前回の記録と比べました。「増えた」ものを先に見てください' : 'この対象には前回の記録がありません。今回が基準になります (次回から差分が出ます)' };
+    return { record_id: rec.id, at: rec.at, set, set_label: def.label, target: { id: t.id, name: t.name, kind: t.kind }, baseline, digest, digest_diff, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), signs, totals, sections, summary, note: baseline ? '前回の記録と比べました。「増えた」ものを先に見てください' : 'この対象には前回の記録がありません。今回が基準になります (次回から差分が出ます)' };
   }
   // 対象のスナップショットの一覧 (新しい順)。古い initial の記録 (incident_probe) も載せる
   snapshots(actor, { target_id, limit = 50 } = {}) {
@@ -373,7 +491,7 @@ export class Mamoricho {
     }
     const common = splitCommonLines(sections.flatMap(sec => sec.results.filter(x => x.diff)));
     const summary = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, steps: sec.results.length, ok: sec.results.filter(x => x.exit_code === 0).length, needs_root: sec.results.filter(x => x.needs_root).length, failed: sec.results.filter(x => x.error).length, added: sec.results.reduce((n, x) => n + (x.diff?.added_count || 0), 0), removed: sec.results.reduce((n, x) => n + (x.diff?.removed_count || 0), 0) }));
-    return { a: { id: A.id, at: A.at, set_label: A.set_label }, b: { id: B.id, at: B.at, set_label: B.set_label }, target: { id: B.target_id, name: B.target_name }, baseline: true, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), sections, summary, totals: { steps: summary.reduce((n, x) => n + x.steps, 0), added: summary.reduce((n, x) => n + x.added, 0), removed: summary.reduce((n, x) => n + x.removed, 0) }, note: `${new Date(A.at).toLocaleString('ja-JP')} のスナップショットと比べました` };
+    return { a: { id: A.id, at: A.at, set_label: A.set_label }, b: { id: B.id, at: B.at, set_label: B.set_label }, target: { id: B.target_id, name: B.target_name, kind: B.target_kind || null }, baseline: true, digest_diff: digestDiff(A.digest, B.digest), common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), sections, summary, totals: { steps: summary.reduce((n, x) => n + x.steps, 0), added: summary.reduce((n, x) => n + x.added, 0), removed: summary.reduce((n, x) => n + x.removed, 0) }, note: `${new Date(A.at).toLocaleString('ja-JP')} のスナップショットと比べました` };
   }
 
   // 速報の下書き: 初動の記録・初動の調査・連絡先から、委員会への速報の形に (箱の AI。無ければ材料だけ並べる)。「安全」「原因は特定」とは書かせない
