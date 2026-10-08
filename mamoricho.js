@@ -12,7 +12,7 @@ import * as mfa from '../mfa.js';
 import { timeStatus } from '../timesync.js';
 import { ITEMS, CATEGORIES, BASELINE, STATUSES, byId } from './checklist.js';
 import { ROOT_STEPS } from '../probe/rootsteps.js';
-import { OUTPUT_KEEP, NO_OUTPUT } from '../probe/probe.js';
+import { OUTPUT_KEEP, NO_OUTPUT, STDERR_MARK } from '../probe/probe.js';
 
 export const TEMPLATES = [
   // 読むだけの調査の型。OS の版と一緒に配られる (= 署名つき)。各 step は probe の判定 (read) を通ったものだけ使う
@@ -38,15 +38,75 @@ export const TEMPLATES = [
   { id: 'linux.authkeys', kind: ['ssh'], label: '鍵でのログインが許されている先 (authorized_keys)', incident: true, steps: [['find', '/home', '/etc/ssh', '-name', 'authorized_keys', '-type', 'f']] },
   { id: 'linux.sudoers', kind: ['ssh'], label: 'sudo の設定', incident: true, steps: [['ls', '-la', '/etc/sudoers.d']] },
   { id: 'linux.preload', kind: ['ssh'], label: '仕込みに使われる場所 (ld.so.preload・rc.local・profile.d)', incident: true, steps: [['cat', '/etc/ld.so.preload'], ['cat', '/etc/rc.local'], ['ls', '-la', '--time-style=long-iso', '/etc/profile.d']] },
+  { id: 'linux.trojan', kind: ['ssh'], label: '乗っ取り・トロイの木馬のよくある痕跡 (一時フォルダ・cron・DNS・属性・カーネル)', incident: true, steps: [
+    ['find', '/tmp', '/var/tmp', '/dev/shm', '-xdev', '-type', 'f', '(', '-perm', '-u+x', '-o', '-name', '.*', ')', '-ls'],
+    ['cat', '/etc/crontab'], ['ls', '-la', '/etc/cron.d', '/etc/cron.hourly', '/etc/cron.daily', '/etc/cron.weekly', '/etc/cron.monthly'],
+    ['grep', '-rsH', '-e', 'curl ', '-e', 'wget ', '-e', 'base64', '-e', '/tmp/', '-e', '/dev/shm', '-e', 'bash -i', '-e', 'nc ', '-e', 'python -c', '-e', 'perl -e', '/etc/crontab', '/etc/cron.d', '/etc/cron.hourly', '/etc/cron.daily', '/etc/cron.weekly', '/etc/rc.local', '/etc/profile.d', '/etc/profile', '/etc/bash.bashrc'],
+    ['find', '/etc/systemd/system', '/usr/lib/systemd/system', '/lib/systemd/system', '-xdev', '-type', 'f', '-mtime', '-7'],
+    ['lsattr', '/etc/passwd', '/etc/group', '/etc/hosts', '/etc/resolv.conf', '/etc/crontab'], ['cat', '/etc/hosts'], ['cat', '/etc/resolv.conf'], ['lsmod']] },
   { id: 'linux.suid', kind: ['ssh'], label: '特権で動くプログラム (SUID)', incident: true, steps: [['find', '/', '-xdev', '-perm', '-4000', '-type', 'f']] },
   { id: 'linux.integrity', kind: ['ssh'], label: 'パッケージの改ざん確認 (dpkg -V / rpm -Va)', incident: true, steps: [['dpkg', '-V'], ['rpm', '-Va']] },
   { id: 'linux.recent_etc', kind: ['ssh'], label: '3 日以内に変わった設定・プログラム', incident: true, steps: [['find', '/etc', '/usr/bin', '/usr/sbin', '/usr/local/bin', '-xdev', '-type', 'f', '-mtime', '-3']] },
   { id: 'linux.logs_auth', kind: ['ssh'], label: 'ログインのログ (直近)', incident: true, steps: [['last', '-n', '30', '-F']] },
 ];
 // 初動セット: 消えやすいものから順に (メモリの中身 → 通信 → ログイン → 仕込まれやすい場所 → ログ)
-export const INCIDENT_SET = ['linux.processes', 'linux.connections', 'linux.logins', 'linux.rootusers', 'linux.users', 'linux.authkeys', 'linux.sudoers', 'linux.autostart', 'linux.preload', 'linux.ports', 'linux.suid', 'linux.integrity', 'linux.recent_etc', 'linux.webroot', 'linux.docker', 'linux.logs_auth'];
+export const INCIDENT_SET = ['linux.processes', 'linux.connections', 'linux.logins', 'linux.rootusers', 'linux.users', 'linux.authkeys', 'linux.sudoers', 'linux.autostart', 'linux.preload', 'linux.trojan', 'linux.ports', 'linux.suid', 'linux.integrity', 'linux.recent_etc', 'linux.webroot', 'linux.docker', 'linux.logs_auth'];
 
 // 行の差分 (順序は問わない): 増えた行と消えた行。時刻や PID のような毎回変わる値は、荒く正規化して比べる
+// 乗っ取り・トロイの木馬の兆候を探すセット (平時の「気休め程度」の確認用。初動セットとほぼ同じ材料を、痕跡の判定つきで)
+export const COMPROMISE_SET = ['linux.trojan', 'linux.processes', 'linux.connections', 'linux.ports', 'linux.rootusers', 'linux.authkeys', 'linux.sudoers', 'linux.autostart', 'linux.preload', 'linux.suid', 'linux.integrity', 'linux.recent_etc', 'linux.logs_auth'];
+// まとめて診断 = 対象のふつうの型 (ボタンの並び) + 兆候のセット。1 回でスナップショットを作り、前回と比べる
+export const FULL_SET = [...new Set([...TEMPLATES.filter(t => t.kind.includes('ssh') && !t.incident).map(t => t.id), ...COMPROMISE_SET])];
+export const SETS = {
+  full: { label: 'まとめて診断', ids: FULL_SET, signs: true, note: 'ふつうの点検の型と、乗っ取りの兆候のセットを 1 回で流し、スナップショットとして残します' },
+  compromise: { label: '乗っ取り・トロイの木馬の兆候', ids: COMPROMISE_SET, signs: true, note: 'よくある手口の痕跡を読むだけで探します。見つからなくても安全とは言えません' },
+  incident: { label: '初動セット', ids: INCIDENT_SET, signs: true, note: '消えやすいものから順に読み、前回との差分を先に出します' },
+};
+const SIGN_RULES_NOTE = '機械的な目安です。見つからなくても「安全」という意味ではありません (巧妙なものは隠れます・ここで分かるのは一部です)。見つかったものも、正規の運用で説明がつくことがあります';
+const BAD_NAMES = /\b(xmrig|kdevtmpfsi|kinsing|minerd|cryptonight|xmr-stak|cpuminer|tsunami|watchbog|sustes|kworkerds|bioset|\.x)\b/i;
+const TMP_PATH = /(^|\s)(\/tmp\/|\/var\/tmp\/|\/dev\/shm\/)/;
+const BAD_PORTS = new Set(['4444', '1337', '31337', '6667', '6697', '3333', '14444', '5555', '7777', '9999']);
+const stepsOf = (sections, template_id, pick) => (sections.find(s => s.template_id === template_id)?.results || sections.find(s => s.template_id === template_id)?.steps || []).filter(x => !pick || pick(x));
+// 兆候の判定は標準出力だけを見る (エラー出力は「読めなかった」の知らせで、痕跡ではない)
+const linesOf = (x) => String(x?.output || '').split(STDERR_MARK)[0].split('\n').map(l => l.trim()).filter(l => l && l !== NO_OUTPUT && !/^(\/usr\/bin\/)?(find|ls|cat|grep|lsattr|lsmod|getent|awk|ps|ss|netstat|sudo): /.test(l) && !/^ERROR: ld\.so/.test(l));
+// 乗っ取り・トロイの木馬の兆候 (読んだ出力への機械的な目安)。warn = 説明がつかなければ疑う、check = 正規の運用でも出るので確かめる
+export function compromiseSigns(sections) {
+  const signs = []; const add = (level, label, why, lines, template_id) => { if (lines.length) signs.push({ level, label, why, lines: lines.slice(0, 20), count: lines.length, template_id }); };
+  // UID 0 が root 以外
+  add('warn', 'root 以外に、管理者と同じ権限 (UID 0) のアカウント', '攻撃者が自分用の裏口として作る典型。正規に作ることはまずありません', stepsOf(sections, 'linux.rootusers', x => x.argv?.[0] === 'awk').flatMap(linesOf).filter(l => !/^root:/.test(l)), 'linux.rootusers');
+  // ld.so.preload
+  add('warn', '/etc/ld.so.preload に読み込み指定がある', 'すべてのプログラムに共通ライブラリを割り込ませる仕組みで、ユーザー空間ルートキットの常套手段。正規の用途はまれ (性能計測ツールなど)', stepsOf(sections, 'linux.preload', x => x.argv?.[1] === '/etc/ld.so.preload' && x.exit_code === 0).flatMap(linesOf).filter(l => !l.startsWith('#')), 'linux.preload');
+  // 一時フォルダの実行ファイル・隠しファイル
+  add('warn', '一時フォルダ (/tmp /var/tmp /dev/shm) に実行ファイルか隠しファイル', '不正プログラムは消されにくい一時フォルダに置かれることが多い。インストーラの残骸のこともあります', stepsOf(sections, 'linux.trojan', x => x.argv?.[0] === 'find' && x.argv?.[1] === '/tmp').flatMap(linesOf), 'linux.trojan');
+  // プロセス: 既知の名前・一時フォルダから起動・CPU 占有
+  const ps = stepsOf(sections, 'linux.processes', x => x.argv?.[0] === 'ps').flatMap(linesOf).filter(l => !/^USER\s+PID/.test(l) && !/\bmamoricho\b/.test(l));
+  add('warn', '不正プログラムとしてよく知られた名前のプロセス', '暗号資産の採掘 (マイニング) やボットの名前です。偽装されることもあるので、無いからといって安心はできません', ps.filter(l => BAD_NAMES.test(l)), 'linux.processes');
+  add('warn', '一時フォルダから起動しているプロセス', '正規のサービスが /tmp や /dev/shm から動くことはほぼありません', ps.filter(l => TMP_PATH.test(l) && !/\b(find|ls|grep)\b/.test(l)), 'linux.processes');
+  add('check', 'CPU を大きく使い続けているプロセス (80% 以上)', '採掘の典型ですが、バックアップや集計など正規の処理でも出ます。心当たりがあるか確かめてください', ps.filter(l => { const m = l.match(/^\S+\s+\d+\s+([\d.]+)\s/); return m && Number(m[1]) >= 80; }), 'linux.processes');
+  // 通信先の不審なポート
+  const conn = stepsOf(sections, 'linux.connections').flatMap(linesOf);
+  add('check', '不審なポートへの通信 (4444/1337/6667/3333/14444 など)', '遠隔操作や採掘プールでよく使われるポートです。正規の用途もあるので相手の住所を確かめてください', conn.filter(l => { const m = [...l.matchAll(/(\d+\.\d+\.\d+\.\d+|\[[0-9a-f:]+\]):(\d+)/g)]; const peer = m.at(-1); return peer && BAD_PORTS.has(peer[2]); }), 'linux.connections');
+  // 自動実行の中の怪しい書き方
+  add('check', '自動実行 (cron・rc.local・profile) に curl / wget / base64 / 一時フォルダ などの記述', '外から持ってきて実行する・難読化する手口の典型ですが、正規の運用スクリプトにもよくあります。中身を読んでください', stepsOf(sections, 'linux.trojan', x => x.argv?.[0] === 'grep').flatMap(linesOf).filter(l => !/:\s*#/.test(l)), 'linux.trojan');
+  // 変更禁止属性
+  add('warn', '変更禁止 (immutable) 属性がついた設定ファイル', '攻撃者が自分の仕込みを消させないために付けることがあります。管理者が意図して付けたのでなければ疑ってください', stepsOf(sections, 'linux.trojan', x => x.argv?.[0] === 'lsattr').flatMap(linesOf).filter(l => /^[-a-zA-Z]*i[-a-zA-Z]*\s+\//.test(l)), 'linux.trojan');
+  // 消された実行ファイルで動くプロセス
+  add('warn', 'ディスクから消された実行ファイルで動いているプロセス', 'メモリだけで動く不正プログラムの手口。ただし、更新のあと再起動していないサービスでも同じ表示になります', stepsOf(sections, 'linux.trojan', x => x.argv?.includes('/proc')).flatMap(linesOf).filter(l => /\/proc\/\d+\/exe/.test(l)), 'linux.trojan');
+  // hosts の書き換え (更新サーバー・セキュリティ関連の名前を乗っ取る)
+  add('check', '/etc/hosts で更新・セキュリティ関連の名前が別の住所に向けられている', '更新を止めたり偽サイトへ誘導したりする手口。社内で意図して書いたものなら問題ありません', stepsOf(sections, 'linux.trojan', x => x.argv?.[1] === '/etc/hosts').flatMap(linesOf).filter(l => !l.startsWith('#') && /(update|security|ubuntu\.com|debian\.org|microsoft|google|kotohako|akigrid|antivirus|clamav|virustotal)/i.test(l) && !/^(127\.|::1)/.test(l)), 'linux.trojan');
+  // sudo NOPASSWD (まもり帳以外)
+  add('check', 'パスワードなしの sudo (NOPASSWD) が、まもり帳以外にある', '裏口として足されることがあります。クラウドの初期ユーザーや自動化で正規に使うこともあります', stepsOf(sections, 'linux.sudoers', x => (x.argv?.[0] === 'grep' || x.argv?.[2] === '/usr/bin/grep' || x.argv?.[1] === '/etc/sudoers' || x.argv?.[2] === '/usr/bin/cat')).flatMap(linesOf).filter(l => /NOPASSWD/.test(l) && !/mamoricho/.test(l) && !/:\s*#|^#/.test(l)), 'linux.sudoers');
+  // root の鍵
+  add('check', 'root に鍵でのログインが許されている', 'root の鍵は攻撃者が残す裏口の定番。運用で使っているなら、鍵の持ち主が分かるか確かめてください', stepsOf(sections, 'linux.authkeys', x => x.argv?.[2] === '/usr/bin/grep').flatMap(linesOf).filter(l => l.startsWith('/root/.ssh/authorized_keys:')), 'linux.authkeys');
+  // パッケージの改ざん (設定ファイル以外)
+  add('warn', 'パッケージのプログラムが配布時と違う (dpkg -V / rpm -V)', '正規の更新では起きません。プログラム本体の書き換えはルートキットやバックドアの典型 (設定ファイル c は除外しています)', stepsOf(sections, 'linux.integrity').flatMap(linesOf).filter(l => /^\S*5\S*\s+(?!c\s)\S*\s*\/(usr\/)?(s?bin|lib|libexec)\//.test(l) || /^S\.5/.test(l)), 'linux.integrity');
+  // 重要な設定の最近の変更
+  add('check', '重要な設定 (passwd・shadow・sudoers・ssh・cron・preload) が 3 日以内に変わった', '管理者の作業でも変わります。心当たりが無ければ、何が変わったか見てください', stepsOf(sections, 'linux.recent_etc').flatMap(linesOf).filter(l => /\/etc\/(passwd|shadow|group|sudoers|ld\.so\.preload|crontab|cron\.d\/|rc\.local|ssh\/)|\.ssh\/authorized_keys/.test(l) && !/sudoers\.d\/mamoricho/.test(l)), 'linux.recent_etc');
+  // 見慣れない場所の SUID
+  add('check', '見慣れない場所にある SUID プログラム', 'root の権限で動くプログラムです。/usr/bin などの定位置以外にあるのは珍しく、権限昇格の裏口のことがあります', stepsOf(sections, 'linux.suid').flatMap(linesOf).filter(l => l.startsWith('/') && !/^\/(usr\/)?(bin|sbin|lib|lib32|lib64|libexec|snap|opt|var\/lib\/snapd)\//.test(l)), 'linux.suid');
+  signs.sort((a, b) => (a.level === b.level ? 0 : a.level === 'warn' ? -1 : 1));
+  return { signs, note: SIGN_RULES_NOTE, warn: signs.filter(x => x.level === 'warn').length, check: signs.filter(x => x.level === 'check').length };
+}
 // 手順の半分以上 (3 つ以上) に同じ「増えた行」(または「消えた行」) があれば、それは 1 つの手順の変化ではなく機械全体の異常 (壊れた preload が全コマンドに出す ERROR など)。
 // 抜き出して返し、各手順の差分からは外す (steps の diff を書き換える)。増えた側が警告、消えた側は「前回の異常が消えた」の知らせ
 export function splitCommonLines(steps) {
@@ -237,7 +297,9 @@ export class Mamoricho {
         // 前回は記録に残した長さ (OUTPUT_KEEP) で切れているので、今回も同じ長さで比べる (全文と比べると切れた先が全部「増えた」になる)
         const truncated = r.output.length > OUTPUT_KEEP;
         const diff = prev ? { ...diffLines(prev.output, r.output.slice(0, OUTPUT_KEEP)), previous_at: prev.at, ...(truncated ? { truncated: true } : {}) } : null;
-        results.push({ argv, exit_code: r.exit_code, output: r.output.slice(0, 20000), run_id: r.run_id, diff, root: !!root });
+        const stale = root && r.exit_code === 1 && /password is required|not allowed to execute/.test(r.output);
+        const partial = r.exit_code !== 0 && !stale && r.output.split(STDERR_MARK)[0].trim() !== '' && r.output.split(STDERR_MARK)[0].trim() !== NO_OUTPUT; // 一部は読めた (find の Permission denied など)
+        results.push({ argv, exit_code: r.exit_code, output: r.output.slice(0, 20000), run_id: r.run_id, diff, root: !!root, ...(partial ? { partial: true } : {}), ...(stale ? { stale_sudoers: true, error: 'この root の手順は登録のあとに増えたものです (対象で登録の 1 行をもう一度実行すると読めるようになります)' } : {}) });
       }
       catch (e) { results.push({ argv, error: e.message, code: e.code }); if (e.code === 'forbidden_command' || e.code === 'approval_required') break; }
     }
@@ -250,29 +312,77 @@ export class Mamoricho {
     return { record_id: rec?.id || null, target: { id: t.id, name: t.name, kind: t.kind }, template: tpl.label, results };
   }
   // 初動セット: 消えやすい順に型を流し、前回 (平時の記録) との差分をまとめる。1 つの記録 (incident_probe) に残す
-  async runIncident(actor, { target_id } = {}) {
+  async runIncident(actor, { target_id } = {}) { return this.runSet(actor, { target_id, set: 'incident' }); }
+  // セット (まとめて診断 / 兆候 / 初動) を流してスナップショットを残す。各手順は前回 (同じ対象・同じ手順の直近の記録) と比べる
+  async runSet(actor, { target_id, set = 'full' } = {}) {
     requireRole(actor, 'operator'); if (!this.probe) throw new HttpError(503, 'no_probe', '調査の仕組みがありません');
+    const def = SETS[set]; if (!def) throw new HttpError(400, 'bad_set', 'セットは full / compromise / incident のどれかです');
     const t = this.probe.getTarget(target_id); if (!t) throw new HttpError(404, 'not_found', '対象が見つかりません');
-    if (t.kind !== 'ssh') throw new HttpError(400, 'bad_kind', '初動セットはサーバー・PC (SSH) の対象向けです');
+    if (t.kind !== 'ssh') throw new HttpError(400, 'bad_kind', `${def.label}はサーバー・PC (SSH) の対象向けです`);
     const sections = []; let baseline = false;
-    for (const tid of INCIDENT_SET) {
+    for (const tid of def.ids) {
       const tpl = TEMPLATES.find(x => x.id === tid); if (!tpl) continue;
       try { const r = await this.runTemplate(actor, { target_id, template_id: tid, record: false }); for (const x of r.results) if (x.diff) baseline = true; sections.push({ template_id: tid, label: tpl.label, results: r.results }); }
       catch (e) { sections.push({ template_id: tid, label: tpl.label, error: e.message, results: [] }); }
     }
     // どの手順にも出る「増えた行」は、1 つの手順の変化ではなく機械全体の異常 (例: 壊れた ld.so.preload が全コマンドに出す ERROR)。1 か所にまとめ、各手順からは外す
     const common = splitCommonLines(sections.flatMap(sec => sec.results.filter(x => x.diff)));
-    const summary = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, steps: sec.results.length, ok: sec.results.filter(x => x.exit_code === 0).length, needs_root: sec.results.filter(x => x.needs_root).length, failed: sec.results.filter(x => !x.needs_root && (x.error || (x.exit_code != null && x.exit_code !== 0))).length, added: sec.results.reduce((n, x) => n + (x.diff?.added_count || 0), 0), removed: sec.results.reduce((n, x) => n + (x.diff?.removed_count || 0), 0) }));
-    const rec = this.record(actor, 'incident_probe', { target_id, target_name: t.name, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), sections: summary, run_ids: sections.flatMap(sec => sec.results.map(x => x.run_id).filter(Boolean)) });
-    audit({ actor, action: 'mamoricho.incident_run', target: target_id, detail: { record: rec.id, baseline, added: summary.reduce((n, x) => n + x.added, 0) } });
-    return { record_id: rec.id, target: { id: t.id, name: t.name }, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), sections, summary, note: baseline ? '前回の記録と比べました。「増えた」ものを先に見てください' : 'この対象には前回の記録がありません。今回が基準になります (次回から差分が出ます)' };
+    const summary = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, steps: sec.results.length, ok: sec.results.filter(x => x.exit_code === 0).length, needs_root: sec.results.filter(x => x.needs_root || x.stale_sudoers).length, failed: sec.results.filter(x => x.error || (x.exit_code && x.exit_code !== 0)).length, added: sec.results.reduce((n, x) => n + (x.diff?.added_count || 0), 0), removed: sec.results.reduce((n, x) => n + (x.diff?.removed_count || 0), 0) }));
+    const signs = def.signs ? compromiseSigns(sections) : null;
+    const totals = { steps: summary.reduce((n, x) => n + x.steps, 0), ok: summary.reduce((n, x) => n + x.ok, 0), needs_root: summary.reduce((n, x) => n + x.needs_root, 0), failed: summary.reduce((n, x) => n + x.failed, 0), added: summary.reduce((n, x) => n + x.added, 0), removed: summary.reduce((n, x) => n + x.removed, 0), warn: signs?.warn || 0, check: signs?.check || 0 };
+    // 記録には出力そのものは持たず (probe_runs にある)、手順ごとの run_id と差分の行 (40 行まで) を持つ。履歴の画面はこれで前回との変化を再現し、出力は run_id で読む
+    const stored = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, error: sec.error || null, steps: sec.results.map(x => ({ argv: x.argv, run_id: x.run_id || null, exit_code: x.exit_code ?? null, root: !!x.root, needs_root: !!x.needs_root, stale_sudoers: !!x.stale_sudoers, partial: !!x.partial, error: x.error || null, added_count: x.diff?.added_count ?? null, removed_count: x.diff?.removed_count ?? null, added: (x.diff?.added || []).slice(0, 40), removed: (x.diff?.removed || []).slice(0, 40), previous_at: x.diff?.previous_at || null, truncated: !!x.diff?.truncated })) }));
+    const rec = this.record(actor, 'snapshot', { set, set_label: def.label, target_id, target_name: t.name, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), signs, totals, sections: stored });
+    audit({ actor, action: 'mamoricho.set_run', target: target_id, detail: { record: rec.id, set, baseline, added: totals.added, warn: totals.warn, check: totals.check } });
+    return { record_id: rec.id, at: rec.at, set, set_label: def.label, target: { id: t.id, name: t.name }, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), signs, totals, sections, summary, note: baseline ? '前回の記録と比べました。「増えた」ものを先に見てください' : 'この対象には前回の記録がありません。今回が基準になります (次回から差分が出ます)' };
   }
+  // 対象のスナップショットの一覧 (新しい順)。古い initial の記録 (incident_probe) も載せる
+  snapshots(actor, { target_id, limit = 50 } = {}) {
+    requireRole(actor, 'viewer');
+    const rows = this.db().prepare("SELECT * FROM mamoricho_records WHERE kind IN ('snapshot','incident_probe') ORDER BY seq DESC LIMIT 2000").all();
+    const out = [];
+    for (const r of rows) {
+      const pl = J.parse(r.payload, {}); if (target_id && pl.target_id !== target_id) continue;
+      if (r.kind === 'snapshot') out.push({ id: r.id, at: r.at, by_name: r.by_name, set: pl.set, set_label: pl.set_label, target_id: pl.target_id, target_name: pl.target_name, baseline: !!pl.baseline, totals: pl.totals, comparable: true });
+      else out.push({ id: r.id, at: r.at, by_name: r.by_name, set: 'incident', set_label: '初動セット', target_id: pl.target_id, target_name: pl.target_name, baseline: !!pl.baseline, totals: { steps: (pl.sections || []).reduce((n, x) => n + (x.steps || 0), 0), ok: (pl.sections || []).reduce((n, x) => n + (x.ok || 0), 0), added: (pl.sections || []).reduce((n, x) => n + (x.added || 0), 0), removed: (pl.sections || []).reduce((n, x) => n + (x.removed || 0), 0), warn: 0, check: 0 }, comparable: false });
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+  snapshot(actor, id) {
+    requireRole(actor, 'viewer');
+    const r = this.db().prepare("SELECT * FROM mamoricho_records WHERE id=? AND kind='snapshot'").get(id); if (!r) throw new HttpError(404, 'not_found', 'スナップショットが見つかりません');
+    return { id: r.id, at: r.at, by_name: r.by_name, ...J.parse(r.payload, {}) };
+  }
+  // 2 つのスナップショット (古い a → 新しい b) を、同じ手順どうしの出力で比べる
+  compareSnapshots(actor, { a, b } = {}) {
+    requireRole(actor, 'operator');
+    const A = this.snapshot(actor, a), B = this.snapshot(actor, b);
+    if (A.target_id !== B.target_id) throw new HttpError(400, 'bad_pair', '同じ対象のスナップショットどうしで比べてください');
+    const outOf = (run_id) => run_id ? (this.db().prepare('SELECT output FROM probe_runs WHERE id=?').get(run_id)?.output || '') : null;
+    const sections = [];
+    for (const sb of B.sections || []) {
+      const sa = (A.sections || []).find(x => x.template_id === sb.template_id);
+      const results = [];
+      for (const xb of sb.steps || []) {
+        const xa = sa?.steps?.find(y => J.str(y.argv) === J.str(xb.argv));
+        const oa = xa ? outOf(xa.run_id) : null, ob = outOf(xb.run_id);
+        results.push({ argv: xb.argv, exit_code: xb.exit_code, run_id: xb.run_id, root: xb.root, needs_root: xb.needs_root, error: xb.error, diff: oa !== null && ob !== null ? { ...diffLines(oa, ob), previous_at: A.at } : null, no_pair: !xa });
+      }
+      sections.push({ template_id: sb.template_id, label: sb.label, results });
+    }
+    const common = splitCommonLines(sections.flatMap(sec => sec.results.filter(x => x.diff)));
+    const summary = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, steps: sec.results.length, ok: sec.results.filter(x => x.exit_code === 0).length, needs_root: sec.results.filter(x => x.needs_root).length, failed: sec.results.filter(x => x.error).length, added: sec.results.reduce((n, x) => n + (x.diff?.added_count || 0), 0), removed: sec.results.reduce((n, x) => n + (x.diff?.removed_count || 0), 0) }));
+    return { a: { id: A.id, at: A.at, set_label: A.set_label }, b: { id: B.id, at: B.at, set_label: B.set_label }, target: { id: B.target_id, name: B.target_name }, baseline: true, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), sections, summary, totals: { steps: summary.reduce((n, x) => n + x.steps, 0), added: summary.reduce((n, x) => n + x.added, 0), removed: summary.reduce((n, x) => n + x.removed, 0) }, note: `${new Date(A.at).toLocaleString('ja-JP')} のスナップショットと比べました` };
+  }
+
   // 速報の下書き: 初動の記録・初動の調査・連絡先から、委員会への速報の形に (箱の AI。無ければ材料だけ並べる)。「安全」「原因は特定」とは書かせない
   async draftReport(actor, { discovered_at = null, summary = '' } = {}) {
     requireRole(actor, 'operator');
-    const notes = this.records(actor, { kind: 'incident_note', limit: 100 }).reverse(); const probes = this.records(actor, { kind: 'incident_probe', limit: 3 });
+    const notes = this.records(actor, { kind: 'incident_note', limit: 100 }).reverse(); const probes = [...this.records(actor, { kind: 'snapshot', limit: 3 }), ...this.records(actor, { kind: 'incident_probe', limit: 3 })].sort((x, y) => (x.at < y.at ? 1 : -1)).slice(0, 3)
+      .map(p => { const pl = p.payload; return { at: p.at, payload: { target_name: pl.target_name, baseline: pl.baseline, set_label: pl.set_label || '初動セット', signs: pl.signs?.signs || [], sections: (pl.sections || []).map(x => ({ label: x.label, added: x.added ?? (x.steps || []).reduce((n, y) => n + (y.added_count || 0), 0), removed: x.removed ?? (x.steps || []).reduce((n, y) => n + (y.removed_count || 0), 0) })) } }; });
     const st = this.settings(); const dl = discovered_at ? this.deadlines(discovered_at) : null;
-    const material = `発覚日: ${dl?.discovered || '(未入力)'}\n報告の期限: ${dl ? `速報 ${dl.prompt_report.from}〜${dl.prompt_report.to} / 確報 ${dl.final_report.to} (不正の目的のおそれ ${dl.final_report_malicious.to})` : '(発覚日を入れると出ます)'}\n責任者: ${st.contacts?.lead || '(未設定)'} / 担当: ${st.contacts?.it || '(未設定)'}\n概要 (担当者の言葉): ${String(summary).slice(0, 1000) || '(未入力)'}\n\n初動の記録 (時系列):\n${notes.map(n => `- ${n.at.slice(0, 16).replace('T', ' ')} ${n.by_name}: ${n.payload.text}`).join('\n') || '- (まだありません)'}\n\n初動の調査:\n${probes.map(p => `- ${p.at.slice(0, 16).replace('T', ' ')} ${p.payload.target_name}: ${p.payload.baseline ? '前回と比べて ' + p.payload.sections.reduce((n, x) => n + x.added, 0) + ' 行増・' + p.payload.sections.reduce((n, x) => n + x.removed, 0) + ' 行減' : '基準を作成'}${p.payload.sections.filter(x => x.added > 0).map(x => `（${x.label}: +${x.added}）`).join('')}`).join('\n') || '- (まだありません)'}`;
+    const material = `発覚日: ${dl?.discovered || '(未入力)'}\n報告の期限: ${dl ? `速報 ${dl.prompt_report.from}〜${dl.prompt_report.to} / 確報 ${dl.final_report.to} (不正の目的のおそれ ${dl.final_report_malicious.to})` : '(発覚日を入れると出ます)'}\n責任者: ${st.contacts?.lead || '(未設定)'} / 担当: ${st.contacts?.it || '(未設定)'}\n概要 (担当者の言葉): ${String(summary).slice(0, 1000) || '(未入力)'}\n\n初動の記録 (時系列):\n${notes.map(n => `- ${n.at.slice(0, 16).replace('T', ' ')} ${n.by_name}: ${n.payload.text}`).join('\n') || '- (まだありません)'}\n\n初動の調査:\n${probes.map(p => `- ${p.at.slice(0, 16).replace('T', ' ')} ${p.payload.target_name}: ${p.payload.baseline ? '前回と比べて ' + p.payload.sections.reduce((n, x) => n + x.added, 0) + ' 行増・' + p.payload.sections.reduce((n, x) => n + x.removed, 0) + ' 行減' : '基準を作成'}${p.payload.sections.filter(x => x.added > 0).map(x => `（${x.label}: +${x.added}）`).join('')}${p.payload.signs.filter(x => x.level === 'warn').length ? ' 兆候 (疑い): ' + p.payload.signs.filter(x => x.level === 'warn').map(x => x.label).join('、') : ''}`).join('\n') || '- (まだありません)'}`;
     const skeleton = `【個人情報保護委員会への速報 (下書き)】\n1. 発生・発覚の日時\n2. 事案の概要\n3. 漏えい等が発生し、またはそのおそれがある個人データの項目・件数 (分からなければ「調査中」)\n4. 原因 (分からなければ「調査中」)\n5. 二次被害またはそのおそれの有無\n6. 本人への対応の実施状況\n7. 公表の実施状況\n8. 再発防止のための措置\n9. その他参考となる事項\n\n--- 材料 ---\n${material}`;
     if (!this.llm) return { draft: skeleton, material, llm: false };
     try {
