@@ -125,7 +125,7 @@ export const splitCommonAdded = (steps) => splitCommonLines(steps).added;
 // ps aux の行は、PID・CPU・メモリ・開始時刻・経過時間の列を落として「利用者 + コマンド」で比べる (毎回変わる数字で差分が埋まらないように)
 const PS_LINE = /^(\S+)\s+\d+\s+[\d.]+\s+[\d.]+\s+\d+\s+\d+\s+\S+\s+\S+\s+\S+\s+[\d:.]+\s+(.*)$/;
 export function diffLines(prev, cur) {
-  const norm = (l) => PS_LINE.test(l) ? l.replace(PS_LINE, '$1 <ps> $2') : l.replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?\b/g, '<時刻>').replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<時刻>').replace(/\b(pid=|users:\(\("[^"]+",pid=)\d+/g, '$1<pid>').replace(/:(3276[89]|327[7-9]\d|32[89]\d{2}|3[3-9]\d{3}|[4-5]\d{4}|6[0-5]\d{3})\b/g, ':<一時ポート>').replace(/\s+/g, ' ').trim();
+  const norm = (l) => PS_LINE.test(l) ? l.replace(PS_LINE, '$1 <ps> $2') : l.replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?\b/g, '<時刻>').replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<時刻>').replace(/\b(pid=|users:\(\("[^"]+",pid=)\d+/g, '$1<pid>').replace(/\/proc\/\d+\//g, '/proc/<pid>/').replace(/:(3276[89]|327[7-9]\d|32[89]\d{2}|3[3-9]\d{3}|[4-5]\d{4}|6[0-5]\d{3})\b/g, ':<一時ポート>').replace(/\s+/g, ' ').trim();
   // 「(出力なし)」は出力が無かった目印で、行ではない (前回が空・今回にエラー行だけ、で「消えた 1」と出ていた)
   const a = new Map(); for (const l of String(prev || '').split('\n')) { const k = norm(l); if (k && k !== NO_OUTPUT) a.set(k, (a.get(k) || 0) + 1); }
   const b = new Map(); for (const l of String(cur || '').split('\n')) { const k = norm(l); if (k && k !== NO_OUTPUT) b.set(k, (b.get(k) || 0) + 1); }
