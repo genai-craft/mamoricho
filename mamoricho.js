@@ -27,6 +27,10 @@ export const TEMPLATES = [
   { id: 'linux.docker', kind: ['ssh'], label: 'コンテナ', steps: [['docker', 'ps', '-a'], ['docker', 'images']] },
   { id: 'linux.webroot', kind: ['ssh'], label: '公開フォルダで最近変わったファイル (7 日)', steps: [['find', '/var/www', '-type', 'f', '-mtime', '-7', '-newer', '/etc/hostname'], ['find', '/var/www', '-type', 'f', '-name', '*.php', '-mtime', '-7']] },
   { id: 'linux.backup', kind: ['ssh'], label: 'バックアップの実態 (最終更新)', steps: [['ls', '-la', '--time-style=long-iso', '/backup'], ['ls', '-la', '--time-style=long-iso', '/mnt/backup'], ['ls', '-la', '--time-style=long-iso', '/var/backups'], ['df', '-h']] },
+  // 引数つきの型: 決まった形の引数だけ (対話で調べるときに AI が選ぶ。ボタンの一覧には出ない)
+  { id: 'linux.package', kind: ['ssh'], label: 'パッケージの版 (名前を指定)', params: { pkg: { re: /^[a-z0-9][a-z0-9+.:~-]{0,80}$/i, desc: 'パッケージ名 (例: openssh-server, nginx, openssl)' } }, steps: [['dpkg', '-l', '{pkg}'], ['rpm', '-q', '{pkg}']] },
+  { id: 'linux.service', kind: ['ssh'], label: 'サービスの状態 (名前を指定)', params: { svc: { re: /^[a-z0-9][a-z0-9@._-]{0,80}$/i, desc: 'systemd のサービス名 (例: ssh, nginx, docker)' } }, steps: [['systemctl', 'is-active', '{svc}'], ['systemctl', 'is-enabled', '{svc}'], ['systemctl', 'show', '{svc}', '-p', 'ActiveState,MainPID,ExecStart,FragmentPath', '--no-pager']] },
+  { id: 'web.path', kind: ['web'], label: '決まったパスが外から見えるか (パスを指定)', params: { path: { re: /^\/[A-Za-z0-9._~/-]{0,200}$/, desc: '/ で始まるパス (例: /wp-content/plugins/xxx/readme.txt)' } }, steps: [['curl', '-I', '{path}']] },
   { id: 'web.head', kind: ['web'], label: '応答とヘッダ (証明書・セキュリティヘッダ)', steps: [['curl', '-I', '-v', '/']] },
   { id: 'web.redirect', kind: ['web'], label: 'http で来た人を https へ誘導しているか', steps: [['curl', '-I', '--plain-http', '/']] },
   // トップページの中身は毎回少しずつ変わる (日時・トークン) ので生の差分は取らず、構造 (外部スクリプト・送り先・証明書・向き先) の変化で比べる (digest)
@@ -56,6 +60,13 @@ export const TEMPLATES = [
   { id: 'linux.logs_auth', kind: ['ssh'], label: 'ログインのログ (直近)', incident: true, steps: [['last', '-n', '30', '-F']] },
 ];
 // 初動セット: 消えやすいものから順に (メモリの中身 → 通信 → ログイン → 仕込まれやすい場所 → ログ)
+// 引数つきの型の引数を確かめる (決まった形だけ。足りない・形が違うものは受けない)
+export function validateParams(tpl, params = {}) {
+  const out = {};
+  for (const [k, def] of Object.entries(tpl.params || {})) { const v = params?.[k]; if (typeof v !== 'string' || !def.re.test(v)) throw new HttpError(400, 'bad_param', `${k}: ${def.desc}`); out[k] = v; }
+  return out;
+}
+export const fillSteps = (tpl, prm) => tpl.steps.map(a => a.map(x => x.replace(/\{(\w+)\}/g, (m, k) => (prm && k in prm ? prm[k] : m))));
 export const INCIDENT_SET = ['linux.processes', 'linux.connections', 'linux.logins', 'linux.rootusers', 'linux.users', 'linux.authkeys', 'linux.sudoers', 'linux.autostart', 'linux.preload', 'linux.trojan', 'linux.ports', 'linux.suid', 'linux.integrity', 'linux.recent_etc', 'linux.webroot', 'linux.docker', 'linux.logs_auth'];
 
 // 行の差分 (順序は問わない): 増えた行と消えた行。時刻や PID のような毎回変わる値は、荒く正規化して比べる
@@ -392,17 +403,18 @@ export class Mamoricho {
   }
 
   // ---- 調査の型 (読むだけ) を対象に流す。各 step は probe の判定を通る (forbidden/change が混じれば止める) ----
-  templates() { return TEMPLATES.map(({ id: tid, kind, label, steps, incident }) => ({ id: tid, kind, label, steps, incident: !!incident })); }
-  async runTemplate(actor, { target_id, template_id, item_id = null, record = true } = {}) {
+  templates() { return TEMPLATES.map(({ id: tid, kind, label, steps, incident, params }) => ({ id: tid, kind, label, steps, incident: !!incident, params: params ? Object.fromEntries(Object.entries(params).map(([k, v]) => [k, v.desc])) : null })); }
+  async runTemplate(actor, { target_id, template_id, item_id = null, record = true, params = null } = {}) {
     requireRole(actor, 'operator'); if (!this.probe) throw new HttpError(503, 'no_probe', '調査の仕組みがありません');
     const tpl = TEMPLATES.find(t => t.id === template_id); if (!tpl) throw new HttpError(404, 'not_found', '調査の型が見つかりません');
     const t = this.probe.getTarget(target_id); if (!t) throw new HttpError(404, 'not_found', '対象が見つかりません');
     if (!tpl.kind.includes(t.kind)) throw new HttpError(400, 'bad_kind', `この型は ${tpl.kind.join('/')} の対象向けです`);
+    const prm = tpl.params ? validateParams(tpl, params || {}) : {}; const steps = fillSteps(tpl, prm); // 引数つきの型は、形を確かめた引数を入れた手順にする
     const results = [];
     const rootSteps = ROOT_STEPS[template_id] || []; const rootRead = !!J.parse(t.verify, {})?.root_read;
     // root で同じコマンドを読むなら、一般ユーザー側の同じ手順は省く (dpkg -V を 2 回走らせない)
     const cmdKey = (a) => [String(a[0]).replace(/^.*\//, ''), ...a.slice(1)].join(' '); const rootKeys = new Set(rootRead ? rootSteps.map(cmdKey) : []);
-    const plan = [...tpl.steps.filter(a => !rootKeys.has(cmdKey(a))).map(a => ({ argv: a })), ...rootSteps.map(a => rootRead ? { argv: ['sudo', '-n', ...a], root: true } : { argv: a, needs_root: true })];
+    const plan = [...steps.filter(a => !rootKeys.has(cmdKey(a))).map(a => ({ argv: a })), ...rootSteps.map(a => rootRead ? { argv: ['sudo', '-n', ...a], root: true } : { argv: a, needs_root: true })];
     for (const { argv, root, needs_root } of plan) {
       if (needs_root) { results.push({ argv, needs_root: true, error: 'root の権限が要ります (登録時に「root の読み取りも許す」を選んだ対象だけ読めます)' }); continue; }
       try {
@@ -417,7 +429,7 @@ export class Mamoricho {
       }
       catch (e) { results.push({ argv, error: e.message, code: e.code }); if (e.code === 'forbidden_command' || e.code === 'approval_required') break; }
     }
-    const rec = record ? this.record(actor, 'probe', { target_id, target_name: t.name, template_id, item_id, runs: results.map(r => ({ argv: r.argv, exit_code: r.exit_code ?? null, run_id: r.run_id || null, error: r.error || null, added: r.diff?.added_count ?? null, removed: r.diff?.removed_count ?? null })) }) : null;
+    const rec = record ? this.record(actor, 'probe', { target_id, target_name: t.name, template_id, item_id, params: prm, runs: results.map(r => ({ argv: r.argv, exit_code: r.exit_code ?? null, run_id: r.run_id || null, error: r.error || null, added: r.diff?.added_count ?? null, removed: r.diff?.removed_count ?? null })) }) : null;
     if (record && item_id && byId[item_id]) {
       const prev = this.db().prepare('SELECT evidence FROM mamoricho_answers WHERE item_id=?').get(item_id); const ev = prev ? J.parse(prev.evidence, []) : [];
       ev.push({ kind: 'probe', ref: rec.id, label: `${t.name}: ${tpl.label} (${new Date().toLocaleDateString('ja-JP')})` });
