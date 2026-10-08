@@ -120,7 +120,7 @@ export class Inquiry {
   view(it) { const { text, ...rest } = it; return { ...rest, text_excerpt: text.slice(0, 600), article_chars: text.length, live: true }; }
   list(actor) {
     requireRole(actor, 'viewer');
-    const live = [...this.items.values()].map(it => ({ id: it.id, at: it.at, by_name: it.by_name, url: it.url, title: it.title, text_excerpt: it.text.slice(0, 120), state: it.state, live: true, record_id: it.record_id }));
+    const live = [...this.items.values()].map(it => ({ id: it.id, at: it.at, by_name: it.by_name, url: it.url, title: it.title, text_excerpt: it.text.slice(0, 120), state: it.state, has_conclusion: !!it.conclusion, pending: (it.plan?.checks || []).filter(c => !c.dropped && !c.done).length, live: true, record_id: it.record_id }));
     const liveIds = new Set(live.map(x => x.record_id).filter(Boolean));
     const recs = this.mm.records(actor, { kind: 'inquiry', limit: 100 }).filter(r => !liveIds.has(r.id)).map(r => ({ id: r.id, at: r.at, by_name: r.by_name, url: r.payload.url, title: r.payload.title, text_excerpt: r.payload.text_excerpt, state: 'done', live: false, record_id: r.id }));
     return { inquiries: [...live, ...recs].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 50) };
