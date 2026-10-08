@@ -11,11 +11,12 @@ import { notify } from '../notify.js';
 import * as mfa from '../mfa.js';
 import { timeStatus } from '../timesync.js';
 import { ITEMS, CATEGORIES, BASELINE, STATUSES, byId } from './checklist.js';
+import { ROOT_STEPS } from '../probe/rootsteps.js';
 
 export const TEMPLATES = [
   // 読むだけの調査の型。OS の版と一緒に配られる (= 署名つき)。各 step は probe の判定 (read) を通ったものだけ使う
   { id: 'linux.basic', kind: ['ssh'], label: '基本 (OS・起動時間・ログイン中)', steps: [['uname', '-a'], ['uptime'], ['who'], ['cat', '/etc/os-release']] },
-  { id: 'linux.ports', kind: ['ssh'], label: '待ち受けているポート', steps: [['ss', '-tlnpH'], ['ss', '-ulnH']] },
+  { id: 'linux.ports', kind: ['ssh'], label: '待ち受けているポート', steps: [['ss', '-tlnpH'], ['ss', '-ulnH'], ['netstat', '-tln']] },
   { id: 'linux.logins', kind: ['ssh'], label: '最近のログイン', steps: [['last', '-n', '30', '-F'], ['lastlog']] },
   { id: 'linux.users', kind: ['ssh'], label: 'アカウントと管理者', steps: [['getent', 'passwd'], ['getent', 'group', 'sudo'], ['getent', 'group', 'wheel'], ['getent', 'group', 'docker']] },
   { id: 'linux.autostart', kind: ['ssh'], label: '自動で動くもの (タイマー・cron)', steps: [['systemctl', 'list-timers', '--all', '--no-pager'], ['crontab', '-l'], ['ls', '-la', '/etc/cron.d', '/etc/cron.daily'], ['cat', '/etc/crontab']] },
@@ -29,7 +30,30 @@ export const TEMPLATES = [
   { id: 'web.exposed', kind: ['web'], label: '出てはいけないファイル', steps: [['curl', '-I', '/.git/HEAD'], ['curl', '-I', '/.env'], ['curl', '-I', '/wp-config.php.bak'], ['curl', '-I', '/backup.zip'], ['curl', '-I', '/phpinfo.php'], ['curl', '-I', '/.DS_Store'], ['curl', '-I', '/wp-login.php'], ['curl', '-I', '/administrator/'], ['curl', '-I', '/phpmyadmin/']] },
   { id: 'web.robots', kind: ['web'], label: 'robots と目印', steps: [['curl', '/robots.txt'], ['curl', '-I', '/readme.html'], ['curl', '-I', '/wp-json/']] },
   { id: 'network.show', kind: ['network'], label: 'ネットワーク機器の版と設定 (show)', steps: [['show', 'version'], ['show', 'running-config']] },
+  // ---- 初動 (有事) 向け。消えやすい順に読む。平時の記録があれば、前回との差分が出る
+  { id: 'linux.processes', kind: ['ssh'], label: '動いているプロセス', incident: true, steps: [['ps', 'auxww']] },
+  { id: 'linux.connections', kind: ['ssh'], label: '通信の相手 (つながっている先)', incident: true, steps: [['ss', '-tnpH', 'state', 'established'], ['netstat', '-tn']] },
+  { id: 'linux.rootusers', kind: ['ssh'], label: '管理者と同じ権限 (UID 0) のアカウント', incident: true, steps: [['awk', '-F:', '$3==0{print}', '/etc/passwd'], ['getent', 'group', 'sudo'], ['getent', 'group', 'wheel']] },
+  { id: 'linux.authkeys', kind: ['ssh'], label: '鍵でのログインが許されている先 (authorized_keys)', incident: true, steps: [['find', '/home', '/etc/ssh', '-name', 'authorized_keys', '-type', 'f']] },
+  { id: 'linux.sudoers', kind: ['ssh'], label: 'sudo の設定', incident: true, steps: [['ls', '-la', '/etc/sudoers.d']] },
+  { id: 'linux.preload', kind: ['ssh'], label: '仕込みに使われる場所 (ld.so.preload・rc.local・profile.d)', incident: true, steps: [['cat', '/etc/ld.so.preload'], ['cat', '/etc/rc.local'], ['ls', '-la', '--time-style=long-iso', '/etc/profile.d']] },
+  { id: 'linux.suid', kind: ['ssh'], label: '特権で動くプログラム (SUID)', incident: true, steps: [['find', '/', '-xdev', '-perm', '-4000', '-type', 'f']] },
+  { id: 'linux.integrity', kind: ['ssh'], label: 'パッケージの改ざん確認 (dpkg -V / rpm -Va)', incident: true, steps: [['dpkg', '-V'], ['rpm', '-Va']] },
+  { id: 'linux.recent_etc', kind: ['ssh'], label: '3 日以内に変わった設定・プログラム', incident: true, steps: [['find', '/etc', '/usr/bin', '/usr/sbin', '/usr/local/bin', '-xdev', '-type', 'f', '-mtime', '-3']] },
+  { id: 'linux.logs_auth', kind: ['ssh'], label: 'ログインのログ (直近)', incident: true, steps: [['last', '-n', '30', '-F']] },
 ];
+// 初動セット: 消えやすいものから順に (メモリの中身 → 通信 → ログイン → 仕込まれやすい場所 → ログ)
+export const INCIDENT_SET = ['linux.processes', 'linux.connections', 'linux.logins', 'linux.rootusers', 'linux.users', 'linux.authkeys', 'linux.sudoers', 'linux.autostart', 'linux.preload', 'linux.ports', 'linux.suid', 'linux.integrity', 'linux.recent_etc', 'linux.webroot', 'linux.docker', 'linux.logs_auth'];
+
+// 行の差分 (順序は問わない): 増えた行と消えた行。時刻や PID のような毎回変わる値は、荒く正規化して比べる
+export function diffLines(prev, cur) {
+  const norm = (l) => l.replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?\b/g, '<時刻>').replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<時刻>').replace(/\b(pid=|users:\(\("[^"]+",pid=)\d+/g, '$1<pid>').replace(/\s+/g, ' ').trim();
+  const a = new Map(); for (const l of String(prev || '').split('\n')) { const k = norm(l); if (k) a.set(k, (a.get(k) || 0) + 1); }
+  const b = new Map(); for (const l of String(cur || '').split('\n')) { const k = norm(l); if (k) b.set(k, (b.get(k) || 0) + 1); }
+  const added = [], removed = [];
+  for (const [k, n] of b) if (!a.has(k)) added.push(k); for (const [k, n] of a) if (!b.has(k)) removed.push(k);
+  return { added: added.slice(0, 200), removed: removed.slice(0, 200), added_count: added.length, removed_count: removed.length };
+}
 
 const SELF_CHECKS = [
   { id: 'self.mfa_remote', label: '外からのログインに多要素認証を求めている', item: 'entry.mfa_remote' },
@@ -175,24 +199,79 @@ export class Mamoricho {
   }
 
   // ---- 調査の型 (読むだけ) を対象に流す。各 step は probe の判定を通る (forbidden/change が混じれば止める) ----
-  templates() { return TEMPLATES.map(({ id: tid, kind, label, steps }) => ({ id: tid, kind, label, steps })); }
-  async runTemplate(actor, { target_id, template_id, item_id = null } = {}) {
+  templates() { return TEMPLATES.map(({ id: tid, kind, label, steps, incident }) => ({ id: tid, kind, label, steps, incident: !!incident })); }
+  async runTemplate(actor, { target_id, template_id, item_id = null, record = true } = {}) {
     requireRole(actor, 'operator'); if (!this.probe) throw new HttpError(503, 'no_probe', '調査の仕組みがありません');
     const tpl = TEMPLATES.find(t => t.id === template_id); if (!tpl) throw new HttpError(404, 'not_found', '調査の型が見つかりません');
     const t = this.probe.getTarget(target_id); if (!t) throw new HttpError(404, 'not_found', '対象が見つかりません');
     if (!tpl.kind.includes(t.kind)) throw new HttpError(400, 'bad_kind', `この型は ${tpl.kind.join('/')} の対象向けです`);
     const results = [];
-    for (const argv of tpl.steps) {
-      try { const r = await this.probe.run(actor, { target_id, argv, template_id, explanation: tpl.label }); results.push({ argv, exit_code: r.exit_code, output: r.output.slice(0, 20000), run_id: r.run_id }); }
+    const rootSteps = ROOT_STEPS[template_id] || []; const rootRead = !!J.parse(t.verify, {})?.root_read;
+    const plan = [...tpl.steps.map(a => ({ argv: a })), ...rootSteps.map(a => rootRead ? { argv: ['sudo', '-n', ...a], root: true } : { argv: a, needs_root: true })];
+    for (const { argv, root, needs_root } of plan) {
+      if (needs_root) { results.push({ argv, needs_root: true, error: 'root の権限が要ります (登録時に「root の読み取りも許す」を選んだ対象だけ読めます)' }); continue; }
+      try {
+        const prev = this.probe.previousOutput(target_id, template_id, argv); // 走らせる前に「前回」を取る (今回を混ぜない)
+        const r = await this.probe.run(actor, { target_id, argv, template_id, explanation: tpl.label });
+        const diff = prev ? { ...diffLines(prev.output, r.output), previous_at: prev.at } : null;
+        results.push({ argv, exit_code: r.exit_code, output: r.output.slice(0, 20000), run_id: r.run_id, diff, root: !!root });
+      }
       catch (e) { results.push({ argv, error: e.message, code: e.code }); if (e.code === 'forbidden_command' || e.code === 'approval_required') break; }
     }
-    const rec = this.record(actor, 'probe', { target_id, target_name: t.name, template_id, item_id, runs: results.map(r => ({ argv: r.argv, exit_code: r.exit_code ?? null, run_id: r.run_id || null, error: r.error || null })) });
-    if (item_id && byId[item_id]) {
+    const rec = record ? this.record(actor, 'probe', { target_id, target_name: t.name, template_id, item_id, runs: results.map(r => ({ argv: r.argv, exit_code: r.exit_code ?? null, run_id: r.run_id || null, error: r.error || null, added: r.diff?.added_count ?? null, removed: r.diff?.removed_count ?? null })) }) : null;
+    if (record && item_id && byId[item_id]) {
       const prev = this.db().prepare('SELECT evidence FROM mamoricho_answers WHERE item_id=?').get(item_id); const ev = prev ? J.parse(prev.evidence, []) : [];
       ev.push({ kind: 'probe', ref: rec.id, label: `${t.name}: ${tpl.label} (${new Date().toLocaleDateString('ja-JP')})` });
       this.db().prepare('INSERT INTO mamoricho_answers(item_id,status,note,evidence,updated_by,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET evidence=excluded.evidence, updated_at=excluded.updated_at').run(item_id, 'unknown', '', J.str(ev.slice(-20)), actor.id, nowIso());
     }
-    return { record_id: rec.id, target: { id: t.id, name: t.name, kind: t.kind }, template: tpl.label, results };
+    return { record_id: rec?.id || null, target: { id: t.id, name: t.name, kind: t.kind }, template: tpl.label, results };
+  }
+  // 初動セット: 消えやすい順に型を流し、前回 (平時の記録) との差分をまとめる。1 つの記録 (incident_probe) に残す
+  async runIncident(actor, { target_id } = {}) {
+    requireRole(actor, 'operator'); if (!this.probe) throw new HttpError(503, 'no_probe', '調査の仕組みがありません');
+    const t = this.probe.getTarget(target_id); if (!t) throw new HttpError(404, 'not_found', '対象が見つかりません');
+    if (t.kind !== 'ssh') throw new HttpError(400, 'bad_kind', '初動セットはサーバー・PC (SSH) の対象向けです');
+    const sections = []; let baseline = false;
+    for (const tid of INCIDENT_SET) {
+      const tpl = TEMPLATES.find(x => x.id === tid); if (!tpl) continue;
+      try { const r = await this.runTemplate(actor, { target_id, template_id: tid, record: false }); for (const x of r.results) if (x.diff) baseline = true; sections.push({ template_id: tid, label: tpl.label, results: r.results }); }
+      catch (e) { sections.push({ template_id: tid, label: tpl.label, error: e.message, results: [] }); }
+    }
+    const summary = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, steps: sec.results.length, ok: sec.results.filter(x => x.exit_code === 0).length, needs_root: sec.results.filter(x => x.needs_root).length, failed: sec.results.filter(x => !x.needs_root && (x.error || (x.exit_code != null && x.exit_code !== 0))).length, added: sec.results.reduce((n, x) => n + (x.diff?.added_count || 0), 0), removed: sec.results.reduce((n, x) => n + (x.diff?.removed_count || 0), 0) }));
+    const rec = this.record(actor, 'incident_probe', { target_id, target_name: t.name, baseline, sections: summary, run_ids: sections.flatMap(sec => sec.results.map(x => x.run_id).filter(Boolean)) });
+    audit({ actor, action: 'mamoricho.incident_run', target: target_id, detail: { record: rec.id, baseline, added: summary.reduce((n, x) => n + x.added, 0) } });
+    return { record_id: rec.id, target: { id: t.id, name: t.name }, baseline, sections, summary, note: baseline ? '前回の記録と比べました。「増えた」ものを先に見てください' : 'この対象には前回の記録がありません。今回が基準になります (次回から差分が出ます)' };
+  }
+  // 速報の下書き: 初動の記録・初動の調査・連絡先から、委員会への速報の形に (箱の AI。無ければ材料だけ並べる)。「安全」「原因は特定」とは書かせない
+  async draftReport(actor, { discovered_at = null, summary = '' } = {}) {
+    requireRole(actor, 'operator');
+    const notes = this.records(actor, { kind: 'incident_note', limit: 100 }).reverse(); const probes = this.records(actor, { kind: 'incident_probe', limit: 3 });
+    const st = this.settings(); const dl = discovered_at ? this.deadlines(discovered_at) : null;
+    const material = `発覚日: ${dl?.discovered || '(未入力)'}\n報告の期限: ${dl ? `速報 ${dl.prompt_report.from}〜${dl.prompt_report.to} / 確報 ${dl.final_report.to} (不正の目的のおそれ ${dl.final_report_malicious.to})` : '(発覚日を入れると出ます)'}\n責任者: ${st.contacts?.lead || '(未設定)'} / 担当: ${st.contacts?.it || '(未設定)'}\n概要 (担当者の言葉): ${String(summary).slice(0, 1000) || '(未入力)'}\n\n初動の記録 (時系列):\n${notes.map(n => `- ${n.at.slice(0, 16).replace('T', ' ')} ${n.by_name}: ${n.payload.text}`).join('\n') || '- (まだありません)'}\n\n初動の調査:\n${probes.map(p => `- ${p.at.slice(0, 16).replace('T', ' ')} ${p.payload.target_name}: ${p.payload.baseline ? '前回と比べて ' + p.payload.sections.reduce((n, x) => n + x.added, 0) + ' 行増・' + p.payload.sections.reduce((n, x) => n + x.removed, 0) + ' 行減' : '基準を作成'}${p.payload.sections.filter(x => x.added > 0).map(x => `（${x.label}: +${x.added}）`).join('')}`).join('\n') || '- (まだありません)'}`;
+    const skeleton = `【個人情報保護委員会への速報 (下書き)】\n1. 発生・発覚の日時\n2. 事案の概要\n3. 漏えい等が発生し、またはそのおそれがある個人データの項目・件数 (分からなければ「調査中」)\n4. 原因 (分からなければ「調査中」)\n5. 二次被害またはそのおそれの有無\n6. 本人への対応の実施状況\n7. 公表の実施状況\n8. 再発防止のための措置\n9. その他参考となる事項\n\n--- 材料 ---\n${material}`;
+    if (!this.llm) return { draft: skeleton, material, llm: false };
+    try {
+      const heads = ['1. 発生・発覚の日時', '2. 事案の概要', '3. 漏えい等が発生し、またはそのおそれがある個人データの項目・件数', '4. 原因', '5. 二次被害またはそのおそれの有無', '6. 本人への対応の実施状況', '7. 公表の実施状況', '8. 再発防止のための措置', '9. その他参考となる事項'];
+      const r = await this.llm.chat([{ role: 'system', content: `中小企業の担当者に代わって、個人情報保護委員会への「速報」の下書きを日本語で書く。見出しは次の 9 つを **この文言のまま、この順で** 使い、増やしたり変えたりしない:\n${heads.join('\n')}\n各見出しの下に 1〜3 文。分からないことは「調査中」と書き、推測で断定しない。「安全」「問題なし」「原因を特定した」とは書かない。材料に無いことは書かない。最後に「※ 速報は分かっている範囲で早めに出し、確報で補う」と添える。` }, { role: 'user', content: `材料:\n${material}\n\n上の材料で 1〜9 を埋めてください。` }], { temperature: 0.1, max_tokens: 1200 });
+      return { draft: r?.content || skeleton, material, llm: true };
+    } catch (e) { return { draft: skeleton, material, llm: false, note: `AI に聞けませんでした: ${String(e.message || e).slice(0, 120)}` }; }
+  }
+
+  // ---- 安全の仕組み (調査が安全である理由を、ふつうの言葉で、生きている状態つきで) ----
+  safety() {
+    const image = this.probe ? this.probe._dk(['image', 'inspect', 'kotohako-probe:1']).status === 0 : false;
+    const chain = this.db().prepare('SELECT COUNT(*) c FROM mamoricho_records').get().c;
+    return { items: [
+      { id: 'readonly', title: '読むだけのコマンドしか動かさない', body: 'コマンドは 1 つずつ「読むだけ / 変えるおそれ / 使えない」に機械的に判定します。消す・止める・入れる・権限を変える・別の機械へつなぐものは実行しません。知らないものは「変えるおそれ」側に倒し、Owner の承認と理由が要ります。', ok: true, detail: '判定の決まりは OS の版と一緒に配られ、調査の型 (16 + 15) はすべて「読むだけ」で固定' },
+      { id: 'noshell', title: 'シェルを通さず、記号も通さない', body: 'パイプ・リダイレクト・つなぎ (| ; & > < $( `) は受け付けません。遠隔のコマンドは 1 本ずつ、対象の機械で展開されないように引用して渡します。', ok: true },
+      { id: 'ledger', title: 'つなぐ先は台帳で固定', body: 'どの機械につなぐか (住所・ポート・利用者) は、まもり帳の台帳の値だけを使います。調査の型や AI は「その機械で何を読むか」しか決められず、台帳に無い機械へはつなげません。初めてつないだときの公開鍵を覚え、次から変わっていれば拒否します (なりすまし・経路のすり替え)。', ok: true },
+      { id: 'container', title: '使い捨てのコンテナから', body: '調査は、読み取り専用・権限を落とした・root でないコンテナ (kotohako-probe) から行い、1 回ごとに消します。時間 (90 秒)・メモリ (256MB)・出力 (2MB) に上限があります。言箱本体のファイルや鍵には触れません。', ok: image, detail: image ? 'コンテナの材料はこの箱にあります' : 'コンテナの材料はまだありません (初回の調査で自動で用意します)' },
+      { id: 'account', title: '対象には読み取り専用のユーザーだけ', body: '1 行の登録で作る mamoricho ユーザーは、パスワード無し・鍵だけ・ポート転送なし・端末なしです。root でしか読めないもの (root の鍵・sudo の設定・認証ログ) は、登録時に許した対象でだけ、あらかじめ決めた読むだけのコマンドを sudoers に完全一致で書いて読みます。任意のコマンドは root で動かせません。消し方は userdel -r mamoricho と rm -f /etc/sudoers.d/mamoricho の 2 つだけ。', ok: true },
+      { id: 'secrets', title: '鍵や秘密は箱の金庫に、出力は伏せ字に', body: '秘密鍵・パスワードは箱の金庫 (暗号化) に入り、画面には出ません。調査の出力は、パスワードや鍵に見える行を伏せ字にしてから箱の中 (AI NAS の「まもり帳」フォルダ) に保存します。', ok: true },
+      { id: 'inside', title: 'データは外に出ない', body: '調査の結果も、相談も、速報の下書きも、箱の中の AI (Akigrid) だけで処理します。箱の外の AI には送りません。外に出すのは、管理者が自分で書き出したときだけです。', ok: this.cfg.security?.external_ai !== 'enabled', detail: this.cfg.security?.external_ai === 'enabled' ? '注意: 箱の設定で外部 AI が有効です (System › 設定)' : '外部 AI は無効' },
+      { id: 'records', title: '記録は書き換えられない', body: 'すべての答え・調査・初動の記録は、1 件ごとに前の記録のハッシュを含めて箱の鍵で署名しています。消したり書き換えたりすると「記録」の画面で分かります。実行は監査ログにも残ります。', ok: true, detail: `いまの記録 ${chain} 件` },
+      { id: 'approval', title: '人が決める', body: 'AI の提案も、変えるおそれのあるコマンドも、最後に決めるのは人です。調査を始める前には毎回「これからやること / やらないこと」を示し、確認してから動きます。', ok: true },
+    ], not_doing: ['設定を書き換えない', 'ファイルを消さない・作らない (対象の機械では mamoricho ユーザーと sudoers の 1 ファイル以外)', 'サービスの停止・再起動をしない', 'ソフトを入れない', '台帳に無い機械へつながない', 'データを箱の外へ送らない'] };
   }
 
   // ---- もしものときのカード (連絡先・体制) と初動の時系列 ----
