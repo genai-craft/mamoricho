@@ -12,6 +12,7 @@ import * as mfa from '../mfa.js';
 import { timeStatus } from '../timesync.js';
 import { ITEMS, CATEGORIES, BASELINE, STATUSES, byId } from './checklist.js';
 import { ROOT_STEPS } from '../probe/rootsteps.js';
+import { OUTPUT_KEEP, NO_OUTPUT } from '../probe/probe.js';
 
 export const TEMPLATES = [
   // 読むだけの調査の型。OS の版と一緒に配られる (= 署名つき)。各 step は probe の判定 (read) を通ったものだけ使う
@@ -46,19 +47,26 @@ export const TEMPLATES = [
 export const INCIDENT_SET = ['linux.processes', 'linux.connections', 'linux.logins', 'linux.rootusers', 'linux.users', 'linux.authkeys', 'linux.sudoers', 'linux.autostart', 'linux.preload', 'linux.ports', 'linux.suid', 'linux.integrity', 'linux.recent_etc', 'linux.webroot', 'linux.docker', 'linux.logs_auth'];
 
 // 行の差分 (順序は問わない): 増えた行と消えた行。時刻や PID のような毎回変わる値は、荒く正規化して比べる
-// 手順の半分以上 (3 つ以上) に同じ「増えた行」があれば、それは機械全体の異常として抜き出し、各手順の差分からは外す (返り値がその行)。steps の diff を書き換える
-export function splitCommonAdded(steps) {
-  if (steps.length < 3) return [];
-  const count = new Map();
-  for (const x of steps) for (const l of new Set(x.diff.added)) count.set(l, (count.get(l) || 0) + 1);
-  const common = [...count].filter(([, n]) => n >= Math.max(3, Math.ceil(steps.length * 0.5))).map(([l]) => l);
-  if (common.length) for (const x of steps) { x.diff.added = x.diff.added.filter(l => !common.includes(l)); x.diff.added_count = x.diff.added.length; }
-  return common;
+// 手順の半分以上 (3 つ以上) に同じ「増えた行」(または「消えた行」) があれば、それは 1 つの手順の変化ではなく機械全体の異常 (壊れた preload が全コマンドに出す ERROR など)。
+// 抜き出して返し、各手順の差分からは外す (steps の diff を書き換える)。増えた側が警告、消えた側は「前回の異常が消えた」の知らせ
+export function splitCommonLines(steps) {
+  const out = { added: [], removed: [] };
+  if (steps.length < 3) return out;
+  for (const side of ['added', 'removed']) {
+    const count = new Map();
+    for (const x of steps) for (const l of new Set(x.diff[side])) count.set(l, (count.get(l) || 0) + 1);
+    const common = [...count].filter(([, n]) => n >= Math.max(3, Math.ceil(steps.length * 0.5))).map(([l]) => l);
+    if (common.length) for (const x of steps) { x.diff[side] = x.diff[side].filter(l => !common.includes(l)); x.diff[`${side}_count`] = x.diff[side].length; }
+    out[side] = common;
+  }
+  return out;
 }
+export const splitCommonAdded = (steps) => splitCommonLines(steps).added;
 export function diffLines(prev, cur) {
   const norm = (l) => l.replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?\b/g, '<時刻>').replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, '<時刻>').replace(/\b(pid=|users:\(\("[^"]+",pid=)\d+/g, '$1<pid>').replace(/\s+/g, ' ').trim();
-  const a = new Map(); for (const l of String(prev || '').split('\n')) { const k = norm(l); if (k) a.set(k, (a.get(k) || 0) + 1); }
-  const b = new Map(); for (const l of String(cur || '').split('\n')) { const k = norm(l); if (k) b.set(k, (b.get(k) || 0) + 1); }
+  // 「(出力なし)」は出力が無かった目印で、行ではない (前回が空・今回にエラー行だけ、で「消えた 1」と出ていた)
+  const a = new Map(); for (const l of String(prev || '').split('\n')) { const k = norm(l); if (k && k !== NO_OUTPUT) a.set(k, (a.get(k) || 0) + 1); }
+  const b = new Map(); for (const l of String(cur || '').split('\n')) { const k = norm(l); if (k && k !== NO_OUTPUT) b.set(k, (b.get(k) || 0) + 1); }
   const added = [], removed = [];
   for (const [k, n] of b) if (!a.has(k)) added.push(k); for (const [k, n] of a) if (!b.has(k)) removed.push(k);
   return { added: added.slice(0, 200), removed: removed.slice(0, 200), added_count: added.length, removed_count: removed.length };
@@ -216,13 +224,17 @@ export class Mamoricho {
     if (!tpl.kind.includes(t.kind)) throw new HttpError(400, 'bad_kind', `この型は ${tpl.kind.join('/')} の対象向けです`);
     const results = [];
     const rootSteps = ROOT_STEPS[template_id] || []; const rootRead = !!J.parse(t.verify, {})?.root_read;
-    const plan = [...tpl.steps.map(a => ({ argv: a })), ...rootSteps.map(a => rootRead ? { argv: ['sudo', '-n', ...a], root: true } : { argv: a, needs_root: true })];
+    // root で同じコマンドを読むなら、一般ユーザー側の同じ手順は省く (dpkg -V を 2 回走らせない)
+    const cmdKey = (a) => [String(a[0]).replace(/^.*\//, ''), ...a.slice(1)].join(' '); const rootKeys = new Set(rootRead ? rootSteps.map(cmdKey) : []);
+    const plan = [...tpl.steps.filter(a => !rootKeys.has(cmdKey(a))).map(a => ({ argv: a })), ...rootSteps.map(a => rootRead ? { argv: ['sudo', '-n', ...a], root: true } : { argv: a, needs_root: true })];
     for (const { argv, root, needs_root } of plan) {
       if (needs_root) { results.push({ argv, needs_root: true, error: 'root の権限が要ります (登録時に「root の読み取りも許す」を選んだ対象だけ読めます)' }); continue; }
       try {
         const prev = this.probe.previousOutput(target_id, template_id, argv); // 走らせる前に「前回」を取る (今回を混ぜない)
         const r = await this.probe.run(actor, { target_id, argv, template_id, explanation: tpl.label });
-        const diff = prev ? { ...diffLines(prev.output, r.output), previous_at: prev.at } : null;
+        // 前回は記録に残した長さ (OUTPUT_KEEP) で切れているので、今回も同じ長さで比べる (全文と比べると切れた先が全部「増えた」になる)
+        const truncated = r.output.length > OUTPUT_KEEP;
+        const diff = prev ? { ...diffLines(prev.output, r.output.slice(0, OUTPUT_KEEP)), previous_at: prev.at, ...(truncated ? { truncated: true } : {}) } : null;
         results.push({ argv, exit_code: r.exit_code, output: r.output.slice(0, 20000), run_id: r.run_id, diff, root: !!root });
       }
       catch (e) { results.push({ argv, error: e.message, code: e.code }); if (e.code === 'forbidden_command' || e.code === 'approval_required') break; }
@@ -247,11 +259,11 @@ export class Mamoricho {
       catch (e) { sections.push({ template_id: tid, label: tpl.label, error: e.message, results: [] }); }
     }
     // どの手順にも出る「増えた行」は、1 つの手順の変化ではなく機械全体の異常 (例: 壊れた ld.so.preload が全コマンドに出す ERROR)。1 か所にまとめ、各手順からは外す
-    const common = splitCommonAdded(sections.flatMap(sec => sec.results.filter(x => x.diff)));
+    const common = splitCommonLines(sections.flatMap(sec => sec.results.filter(x => x.diff)));
     const summary = sections.map(sec => ({ template_id: sec.template_id, label: sec.label, steps: sec.results.length, ok: sec.results.filter(x => x.exit_code === 0).length, needs_root: sec.results.filter(x => x.needs_root).length, failed: sec.results.filter(x => !x.needs_root && (x.error || (x.exit_code != null && x.exit_code !== 0))).length, added: sec.results.reduce((n, x) => n + (x.diff?.added_count || 0), 0), removed: sec.results.reduce((n, x) => n + (x.diff?.removed_count || 0), 0) }));
-    const rec = this.record(actor, 'incident_probe', { target_id, target_name: t.name, baseline, common_added: common.slice(0, 20), sections: summary, run_ids: sections.flatMap(sec => sec.results.map(x => x.run_id).filter(Boolean)) });
+    const rec = this.record(actor, 'incident_probe', { target_id, target_name: t.name, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), sections: summary, run_ids: sections.flatMap(sec => sec.results.map(x => x.run_id).filter(Boolean)) });
     audit({ actor, action: 'mamoricho.incident_run', target: target_id, detail: { record: rec.id, baseline, added: summary.reduce((n, x) => n + x.added, 0) } });
-    return { record_id: rec.id, target: { id: t.id, name: t.name }, baseline, common_added: common.slice(0, 20), sections, summary, note: baseline ? '前回の記録と比べました。「増えた」ものを先に見てください' : 'この対象には前回の記録がありません。今回が基準になります (次回から差分が出ます)' };
+    return { record_id: rec.id, target: { id: t.id, name: t.name }, baseline, common_added: common.added.slice(0, 20), common_removed: common.removed.slice(0, 20), sections, summary, note: baseline ? '前回の記録と比べました。「増えた」ものを先に見てください' : 'この対象には前回の記録がありません。今回が基準になります (次回から差分が出ます)' };
   }
   // 速報の下書き: 初動の記録・初動の調査・連絡先から、委員会への速報の形に (箱の AI。無ければ材料だけ並べる)。「安全」「原因は特定」とは書かせない
   async draftReport(actor, { discovered_at = null, summary = '' } = {}) {
