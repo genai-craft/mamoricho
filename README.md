@@ -40,9 +40,10 @@ llm/       LLM の口 (providers.js)
 ui/        画面 (単体版の shell と、言箱 OS のデスクトップの両方に載る)
 ports.js   外の世界に求めるもの (db / audit / requireRole / vault / approvals / signer …)。実装は standalone/ か、組み込み先が差し出す
 standalone/ 単体版 (ローカルログイン・SQLite・署名つき監査・画面内承認・ローカル金庫・ed25519 鍵)
+test/      パッケージ自身のテスト (`npm test`): 境界 (import が node: と中だけ) と、単体版の通し (ログイン → 画面の API → 記録の鎖 → 承認 → 金庫)
 ```
 
-パッケージの中は node の標準モジュールとパッケージの中しか import しません (組み込み先の実装に依存しない)。
+パッケージの中は node の標準モジュールとパッケージの中しか import しません (組み込み先の実装に依存しない)。これはテストで機械的に確かめ、GitHub Actions (.github/workflows/test.yml) で push ごとに走ります。
 
 ## 言箱 (Kotohako) との関係
 
