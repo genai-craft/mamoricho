@@ -1,0 +1,17 @@
+{
+  "name": "mamoricho",
+  "version": "0.1.0",
+  "description": "まもり帳 — 中小企業の情報漏えい対策の「最低限」を、対話で確かめて記録に残し、読むだけで診断し、管理者と API の権限を見張る。ローカル LLM (Ollama など) と docker で動く",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "genai-craft (生成AI工房)",
+  "homepage": "https://genai-craft.com/",
+  "engines": { "node": ">=22.13" },
+  "main": "index.js",
+  "bin": { "mamoricho": "standalone/cli.mjs" },
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning standalone/cli.mjs serve",
+    "test": "node --no-warnings=ExperimentalWarning --test \"test/**/*.test.js\""
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,20 @@
+# docker compose up -d のあと、初回だけ: docker compose exec mamoricho node standalone/cli.mjs init --user owner --password '********'
+# LLM は同じ compose の ollama (http://ollama:11434/v1)。ollama pull qwen3:8b を忘れずに。社外のサービスを使うなら MAMORICHO_LLM_* を変える
+services:
+  mamoricho:
+    build: { context: .., dockerfile: standalone/Dockerfile }
+    ports: ["7700:7700"]
+    volumes:
+      - mamoricho-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock   # 調査の使い捨てコンテナを起動するため (ホストの docker を使う)
+    environment:
+      MAMORICHO_LLM_PROVIDER: ollama
+      MAMORICHO_LLM_BASE_URL: http://ollama:11434/v1
+      MAMORICHO_LLM_MODEL: qwen3:8b
+    depends_on: [ollama]
+  ollama:
+    image: ollama/ollama
+    volumes: [ollama:/root/.ollama]
+volumes:
+  mamoricho-data: {}
+  ollama: {}

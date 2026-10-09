@@ -1,0 +1,15 @@
+まもり帳 (Mamoricho)
+Copyright (c) 2026 genai-craft (生成AI工房)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+まもり帳のソースコードは Apache License 2.0 で公開されています。著作権は genai-craft (生成AI工房) に帰属します。
+
+「言箱 (Kotohako)」としての提供 (製品への組み込み、商標・名称の使用、サポートや保証を伴う提供) は、
+genai-craft から株式会社フューチャースタンダードへの別途の提供許諾に基づくものであり、
+Apache License 2.0 が与える権利とは別のものです。Apache License 2.0 の下で本ソフトウェアを利用する
+第三者は、「言箱」「Kotohako」「まもり帳」の商標・名称・ロゴについての権利を得ません (ライセンス第 6 条)。
+
+Third-party notices:
+- 点検の基準として、個人情報保護委員会「大規模な漏えい等事案を踏まえた対応について (注意喚起)」(2026-10-07) および
+  WARNING (令和 8 年 10 月 7 日改訂) を参照しています。基準の文書そのものは含みません。

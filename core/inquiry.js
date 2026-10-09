@@ -1,10 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 genai-craft (生成AI工房). まもり帳 (Mamoricho) — https://genai-craft.com/
 // まもり帳 — 対話で調べる (docs/MAMORICHO_DESIGN.md「対話で調べる」)。
 //   利用者が持ってきたニュースの URL や文章 → 箱の AI が下読み → 台帳の対象に関係するかを考え、「読むだけの型 × 対象」の確認を提案
 //   → 利用者が承認して実行 → AI が記事と結果を突き合わせた見立て (目安) → 続けて聞ける。
 //   AI は選ぶだけで作らない: 提案できるのは一覧にある型と対象だけ。コマンドは作れない。引数つきの型は決まった形の引数だけ。
 import { HttpError, id as newId, nowIso } from '../util.js';
-import { audit } from '../audit.js';
-import { requireRole } from '../auth.js';
 import { TEMPLATES, validateParams, fillSteps } from './mamoricho.js';
 
 const MAX_TEXT = 12000; // AI に渡す記事の長さ
@@ -15,8 +15,8 @@ const str = (v, n = 2000) => (typeof v === 'string' ? v : v == null ? '' : JSON.
 const arr = (v, n = 10) => (Array.isArray(v) ? v.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim().slice(0, 300)).slice(0, n) : []);
 
 export class Inquiry {
-  constructor(mm, { probe, llm }) { this.mm = mm; this.probe = probe; this.llm = llm; this.items = new Map(); }
-  _get(id) { const it = this.items.get(id); if (!it) throw new HttpError(404, 'not_found', 'この対話は見つかりません (言箱の再起動で消えたかもしれません。要点は「記録」に残っています)'); return it; }
+  constructor(mm, ports, { probe = null } = {}) { this.mm = mm; this.ports = ports; this.probe = probe; this.llm = ports.llm; this.items = new Map(); }
+  _get(id) { const it = this.items.get(id); if (!it) throw new HttpError(404, 'not_found', `この対話は見つかりません (${this.ports.brand.os}の再起動で消えたかもしれません。要点は「記録」に残っています)`); return it; }
   // 台帳の対象と、直近に読んだ事実 (OS・待ち受け・更新・HP の構造)。AI が「関係するか」を考える材料
   _targets(actor) {
     const list = this.probe.listTargets(actor);
@@ -32,7 +32,7 @@ export class Inquiry {
     });
   }
   _catalog() { return TEMPLATES.map(t => ({ id: t.id, kind: t.kind, label: t.label, steps: t.steps.map(a => a.join(' ')), params: t.params ? Object.fromEntries(Object.entries(t.params).map(([k, v]) => [k, v.desc])) : null })); }
-  _sys() { return 'あなたは、中小企業の情報セキュリティ担当者を手伝う「言箱 (ことはこ)」のまもり帳の AI です。利用者が持ってきた記事や情報を読み、台帳にある機械 (対象) に関係があるかを考え、関係を確かめるために流せる「読むだけの調査の型」を選びます。守ること: (1) 選べるのは一覧にある型と対象だけ。コマンドは作らない。引数つきの型は、説明された形の引数だけ。(2) 推測は推測と書く。「安全」とは言い切らない。(3) 版の読み方は配布元で違う (Debian/Ubuntu はバックポートで古い版番号のまま直されることがある) ことを踏まえる。(4) 出力は JSON だけ。日本語で、やさしい言葉で。'; }
+  _sys() { const B = this.ports.brand; return `あなたは、中小企業の情報セキュリティ担当者を手伝う「${B.os}」の${B.product}の AI です。利用者が持ってきた記事や情報を読み、台帳にある機械 (対象) に関係があるかを考え、関係を確かめるために流せる「読むだけの調査の型」を選びます。守ること: (1) 選べるのは一覧にある型と対象だけ。コマンドは作らない。引数つきの型は、説明された形の引数だけ。(2) 推測は推測と書く。「安全」とは言い切らない。(3) 版の読み方は配布元で違う (Debian/Ubuntu はバックポートで古い版番号のまま直されることがある) ことを踏まえる。(4) 出力は JSON だけ。日本語で、やさしい言葉で。`; }
   _ctx(actor, it) {
     const targets = this._targets(actor);
     const tl = targets.map(t => `- id=${t.id} 名前=「${t.name}」 種類=${t.kind} 住所=${t.host}${t.hostname ? ' 機械名=' + t.hostname : ''}${t.notes ? ' 備考=' + t.notes.slice(0, 120) : ''} 調べられる=${t.usable ? 'はい' : 'いいえ'}${t.facts.length ? '\n  直近に読んだ事実:\n' + t.facts.map(f => '  ' + f.replace(/\n/g, '\n  ')).join('\n') : ''}`).join('\n');
@@ -55,7 +55,7 @@ export class Inquiry {
     return out;
   }
   async start(actor, { url = null, text = null } = {}) {
-    requireRole(actor, 'operator');
+    this.ports.requireRole(actor, 'operator');
     url = url ? String(url).trim() : null; text = text ? String(text).trim() : null;
     if (!url && !text) throw new HttpError(400, 'bad_request', 'アドレスか文章を入れてください');
     const article = url ? await this.probe.fetchPublic(actor, url) : null;
@@ -71,12 +71,12 @@ export class Inquiry {
       } catch (e) { it.note = `AI の下読みができませんでした: ${String(e.message || e).slice(0, 160)}`; }
     }
     this.items.set(it.id, it); while (this.items.size > KEEP) this.items.delete(this.items.keys().next().value);
-    audit({ actor, action: 'mamoricho.inquiry_start', target: it.id, detail: { url: url ? url.slice(0, 200) : null, text_chars: (text || '').length, checks: it.plan?.checks?.filter(c => !c.dropped).length || 0 } });
+    this.ports.audit({ actor, action: 'mamoricho.inquiry_start', target: it.id, detail: { url: url ? url.slice(0, 200) : null, text_chars: (text || '').length, checks: it.plan?.checks?.filter(c => !c.dropped).length || 0 } });
     return this.view(it);
   }
   // 提案された確認を実行する (ふつうの型と同じ道: classify・コンテナ・記録)。終わったら AI が見立てを書く
   async run(actor, { id } = {}) {
-    requireRole(actor, 'operator'); const it = this._get(id);
+    this.ports.requireRole(actor, 'operator'); const it = this._get(id);
     if (!it.plan) throw new HttpError(400, 'no_plan', '提案がありません');
     const todo = it.plan.checks.filter(c => !c.dropped && !c.done); if (!todo.length) throw new HttpError(400, 'nothing', '実行する手順がありません');
     for (const c of todo) {
@@ -97,12 +97,12 @@ export class Inquiry {
     // 記録には記事の全文は持たない (URL・題・要点・提案・結果の要約・見立てだけ)
     const rec = this.mm.record(actor, 'inquiry', { inquiry_id: it.id, url: it.url, final_url: it.final_url, title: it.title, text_excerpt: it.text.slice(0, 300), summary: it.plan.summary, severity: it.plan.severity, relevance: it.plan.relevance, checks: it.plan.checks.map(c => ({ target_name: c.target_name, template_id: c.template_id, params: c.params || null, why: c.why, done: !!c.done, dropped: c.dropped || null })), results: it.results.map(r => ({ target_name: r.target_name, template_label: r.template_label, record_id: r.record_id, ok: r.ok, steps: r.steps.length, error: r.error || null })), conclusion: it.conclusion });
     it.record_id = rec.id;
-    audit({ actor, action: 'mamoricho.inquiry_run', target: it.id, detail: { record: rec.id, checks: todo.length, affected: it.conclusion.affected.filter(a => a.verdict === '該当のおそれ').length } });
+    this.ports.audit({ actor, action: 'mamoricho.inquiry_run', target: it.id, detail: { record: rec.id, checks: todo.length, affected: it.conclusion.affected.filter(a => a.verdict === '該当のおそれ').length } });
     return this.view(it);
   }
   // 続けて聞く。AI は答えと、必要なら追加の確認 (提案に足す) を返す
   async ask(actor, { id, text } = {}) {
-    requireRole(actor, 'operator'); const it = this._get(id); text = String(text || '').trim(); if (!text) throw new HttpError(400, 'bad_request', '聞きたいことを入れてください');
+    this.ports.requireRole(actor, 'operator'); const it = this._get(id); text = String(text || '').trim(); if (!text) throw new HttpError(400, 'bad_request', '聞きたいことを入れてください');
     it.messages.push({ role: 'user', text: text.slice(0, 2000), at: nowIso() });
     if (!this.llm) { it.messages.push({ role: 'assistant', text: 'この箱には AI が無いので答えられません。', at: nowIso() }); return this.view(it); }
     try {
@@ -116,10 +116,10 @@ export class Inquiry {
     } catch (e) { it.messages.push({ role: 'assistant', text: `AI に聞けませんでした: ${String(e.message || e).slice(0, 160)}`, at: nowIso() }); }
     return this.view(it);
   }
-  get(actor, id) { requireRole(actor, 'viewer'); return this.view(this._get(id)); }
+  get(actor, id) { this.ports.requireRole(actor, 'viewer'); return this.view(this._get(id)); }
   view(it) { const { text, ...rest } = it; return { ...rest, text_excerpt: text.slice(0, 600), article_chars: text.length, live: true }; }
   list(actor) {
-    requireRole(actor, 'viewer');
+    this.ports.requireRole(actor, 'viewer');
     const live = [...this.items.values()].map(it => ({ id: it.id, at: it.at, by_name: it.by_name, url: it.url, title: it.title, text_excerpt: it.text.slice(0, 120), state: it.state, has_conclusion: !!it.conclusion, pending: (it.plan?.checks || []).filter(c => !c.dropped && !c.done).length, live: true, record_id: it.record_id }));
     const liveIds = new Set(live.map(x => x.record_id).filter(Boolean));
     const recs = this.mm.records(actor, { kind: 'inquiry', limit: 100 }).filter(r => !liveIds.has(r.id)).map(r => ({ id: r.id, at: r.at, by_name: r.by_name, url: r.payload.url, title: r.payload.title, text_excerpt: r.payload.text_excerpt, state: 'done', live: false, record_id: r.id }));

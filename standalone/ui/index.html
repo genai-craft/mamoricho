@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>まもり帳</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/shell.css">
+</head>
+<body>
+<div id="login" class="hidden">
+  <form id="login-form" class="login-card">
+    <div class="login-head"><img src="/icon.svg" alt="" width="40" height="40"><div><b>まもり帳</b><div class="sub" style="margin:0">基本を確かめて、記録に残す</div></div></div>
+    <label class="lbl">ユーザー名</label><input class="inp" name="username" autocomplete="username" required>
+    <label class="lbl">パスワード</label><input class="inp" name="password" type="password" autocomplete="current-password" required>
+    <div id="login-msg" class="notice err hidden"></div>
+    <button class="btn primary" type="submit" style="width:100%;margin-top:10px">ログイン</button>
+    <div class="sub" style="font-size:12px;margin-top:10px">初めてのときは、サーバーで <code>mamoricho init --user owner --password …</code> を実行してください。</div>
+  </form>
+</div>
+<header id="top" class="hidden"><img src="/icon.svg" alt="" width="26" height="26"><b>まもり帳</b><span id="top-user" class="sub" style="margin:0 0 0 auto"></span><button id="logout" class="btn sm">ログアウト</button></header>
+<main id="win" class="hidden"></main>
+<div id="modal" class="hidden"></div>
+<div id="toasts"></div>
+<script src="/shell.js"></script>
+<script src="/mamoricho.js"></script>
+<script>AIOS.boot();</script>
+</body>
+</html>
