@@ -157,8 +157,9 @@ async function renderSafety(c) {
 // ---------- 対象 ----------
 async function renderTargets(c, p, win) {
   c.append(el('h1', {}, '対象'), el('p', { class: 'sub' }, '調べてよい機械の台帳です。ここに載せたものだけを、読むだけの決まった手順で調べます。つなぐ先 (住所・ポート・利用者) は台帳の値を使うので、ほかの機械へはつなげません。'));
+  // 台帳を見る・調べるのはオペレーター以上 (閲覧の人には、権限のエラーではなく案内を出す)
+  if (!isOp()) { c.append(el('div', { class: 'notice info' }, '対象の台帳を見る・調べるのは、オペレーター以上の人です。調べてほしい機械があれば、管理者に伝えてください。')); return; }
   let d, tpl; try { [d, tpl] = await Promise.all([GET('/probe/targets'), GET('/mamoricho/templates')]); } catch (e) { c.append(el('div', { class: 'notice err' }, e.message)); return; }
-  if (!isOp()) { c.append(el('div', { class: 'notice info' }, '対象の登録と調査は Operator 以上が行えます。')); }
   const tools = el('div', { class: 'row', style: { gap: '8px', marginBottom: '12px' } }, isAdmin() ? el('button', { class: 'btn primary', onclick: () => addTargetWizard(win) }, '＋ 対象を追加') : '', el('button', { class: 'btn', onclick: () => runsDialog() }, '調査の履歴'));
   c.append(tools);
   if (!d.targets.length) c.append(el('div', { style: CARD }, el('h2', { style: { marginTop: 0 } }, 'はじめての方へ'), el('p', {}, '難しい設定は要りません。「対象を追加」を押すと、3 つの聞き方で案内します。'),
