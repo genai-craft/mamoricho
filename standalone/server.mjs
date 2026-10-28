@@ -124,5 +124,5 @@ export function createServer({ dataDir, config = {} } = {}) {
     }
   }
   const server = config.tls?.cert ? https.createServer({ cert: fs.readFileSync(config.tls.cert), key: fs.readFileSync(config.tls.key) }, handle) : http.createServer(handle);
-  return { server, ports, mm, probe, authz, inquiry, auth, standalone: sa, start() { mm.start(); return this; }, stop() { mm.stop(); server.close(); } };
+  return { server, ports, mm, probe, authz, inquiry, auth, standalone: sa, ext: { scs: mk.scs, ledgers: mk.ledgers, policies: mk.policies, notices: mk.notices }, start() { mm.start(); return this; }, stop() { mm.stop(); server.close(); } };
 }

@@ -123,7 +123,7 @@ export class Scs {
     const tools = SCS_CRITERIA.filter(c => inLevel(c, target) && SCS_GUIDE[c.id]?.k === 'tool').map(c => ({ id: c.id, q: SCS_GUIDE[c.id].q, status: answers[c.id]?.status || null }));
     const rv = this.db().prepare('SELECT id, level, state, requested_at, confirmed_at, declared_at FROM mm_scs_reviews ORDER BY requested_at DESC LIMIT 1').get() || null;
     const acq = p.acquired || {}; const exp = ['3', '4'].map(l => acq[l] ? { level: Number(l), ...acq[l], days_left: Math.floor((Date.parse(acq[l].expires_at) - now) / DAY) } : null).filter(Boolean);
-    return { source: SCS_SOURCE, target_level: target, level3: lv(3), level4: lv(4), due, plans: plans.slice(0, 30), tools, review: rv, acquired: exp, profile_ready: !!(p.company && p.lead && p.it), experts: (p.experts || []).length, note: '★の取得は制度の手続き (★3 はセキュリティ専門家の確認を経た自己評価、★4 は評価機関の評価) によります。ここは準備と記録のための道具です' };
+    return { source: SCS_SOURCE, target_level: target, level3: lv(3), level4: lv(4), due, plans: plans.slice(0, 30), tools, review: rv, acquired: exp, profile_ready: !!(p.company && p.lead && p.it), experts: (p.experts || []).length, note: '★の取得は制度の手続き (★3 はセキュリティ専門家の確認を経た自己評価、★4 は評価機関の評価) によります。ここは準備と記録のための道具です。' };
   }
   // ---- 改善計画書 (できていない項目と、何を・誰が・いつまでに) ----
   async plan(actor, { level = 3 } = {}) {
