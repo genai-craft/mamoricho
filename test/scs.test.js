@@ -128,6 +128,7 @@ test('規程: ひな形に会社の情報 → AI で埋める (決まりを変�
   llmReply = base.body.replace('【要記入: 例: 90 日】', '90 日');
   const good = await policies.draft(A(op), { template_id: 'accounts', notes: '使われていない ID は 90 日で止める', use_ai: true }); assert.equal(good.source, 'ai'); assert.equal(good.ai.filled, 1);
   llmReply = base.body.replace('10 文字以上', '6 文字以上'); const weak = await policies.draft(A(op), { template_id: 'accounts', notes: 'x', use_ai: true }); assert.equal(weak.source, 'template', '数字の決まりを弱めたら戻す');
+  llmReply = base.body.replace('【要記入: 例: 90 日】', '60 日'); const ex60 = await policies.draft(A(op), { template_id: 'accounts', notes: '60 日で止める', use_ai: true }); assert.equal(ex60.source, 'ai', '【要記入: 例: …】の中の数字は例なので、メモの数字で埋めてよい');
   const sv = policies.save(A(op), { template_id: 'accounts', body: good.body, source: 'ai' }); assert.equal(sv.version, 1);
   await assert.rejects(() => policies.adopt(A(op), { policy_id: sv.policy_id }), /権限|forbidden|role/i, '採用は Admin 以上');
   const ad = await policies.adopt(A(owner), { policy_id: sv.policy_id, notify: true }); assert.equal(ad.version, 1); assert.ok(ad.notice.criteria.includes('4-1-5-5'));

@@ -1,6 +1,6 @@
 {
   "name": "mamoricho",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "まもり帳 — 中小企業の情報漏えい対策の「最低限」を、対話で確かめて記録に残し、読むだけで診断し、管理者と API の権限を見張る。ローカル LLM (Ollama など) と docker で動く",
   "type": "module",
   "license": "Apache-2.0",

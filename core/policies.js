@@ -12,8 +12,8 @@ import { docxText, mdToDocx } from './docx.js';
 
 const MISSING = (what) => `【要記入: ${what}】`;
 const MAX_TEXT = 2 << 20;
-// 規程の本文から、変えてはいけない数字の決まり (日数・文字数・回数・期間)
-const RULE_NUMS = (s) => [...new Set(String(s).match(/\d+\s*(?:日|文字|回|か月|ヶ月|年|時間)(?:以上|以内)?/g) || [])].map(x => x.replace(/\s+/g, ''));
+// 規程の本文から、変えてはいけない数字の決まり (日数・文字数・回数・期間)。【要記入: 例: 90 日】の中の数字は例なので含めない (埋めるのが正しい)
+const RULE_NUMS = (s) => [...new Set(String(s).replace(/【要記入[^】]*】/g, '').match(/\d+\s*(?:日|文字|回|か月|ヶ月|年|時間)(?:以上|以内)?/g) || [])].map(x => x.replace(/\s+/g, ''));
 const HEADS = (s) => String(s).split('\n').filter(l => /^#{1,2}\s/.test(l)).map(l => l.trim());
 // 段落に分ける (空行・見出し・箇条書き・表の行ごと)。番号は 1 から
 export function paragraphs(text) {

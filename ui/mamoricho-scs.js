@@ -349,6 +349,12 @@ async function renderInbox(c, p, win) {
   c.append(box, pb);
 }
 
+// ---------- 使い方 (言箱では OS の使い方の文書。単体版・デモでは、くわしいページへ) ----------
+async function renderManual(c) {
+  c.append(el('h1', {}, '使い方'));
+  try { const t = await GET('/apps/mamoricho/help'); c.append(el('div', { style: CARD }, md(t.markdown.replace(/^#\s+.*\n/, ''))), sub(`${t.name} ${t.version} の使い方。チャットで「まもり帳で〇〇するには？」と聞いても、この文書から答えます。`)); }
+  catch { c.append(el('div', { style: CARD }, el('p', {}, 'まもり帳のできることと使い方は、次のページにまとめています。'), el('ul', {}, el('li', {}, el('a', { href: 'https://kotohako.com/apps/mamoricho/', target: '_blank', rel: 'noopener' }, 'kotohako.com のまもり帳のページ (使い方・SCS 評価制度の準備・画面)')), el('li', {}, el('a', { href: 'https://github.com/genai-craft/mamoricho#readme', target: '_blank', rel: 'noopener' }, 'GitHub の README (単体版の動かし方・作り)'))))); }
+}
 AIOS.mamorichoAck = { open: (nid) => ackDialog(nid), inbox: renderInbox };
 AIOS.mamorichoExt = {
   // メニュー: 印の無いものは「点検」の後ろ、tail はメニューの最後、hidden はメニューに出さない (ほかの画面から入る)
@@ -358,6 +364,7 @@ AIOS.mamorichoExt = {
     ledgers: { label: '台帳', icon: '🗂', render: renderLedgers },
     notices: { label: '全員に知らせる', icon: '📣', tail: true, sep: true, render: renderNotices },
     inbox: { label: 'お知らせの確認', icon: '📬', tail: true, render: renderInbox },
+    manual: { label: '使い方', icon: '📖', tail: true, render: renderManual },
     scsplan: { label: '改善計画書', icon: '📝', hidden: true, render: renderPlan },
     scsreview: { label: '確認と宣誓', icon: '🖋', hidden: true, render: renderReview },
     scsprofile: { label: '会社の情報', icon: '🏢', hidden: true, render: renderProfile },
