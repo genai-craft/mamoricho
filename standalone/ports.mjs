@@ -93,8 +93,8 @@ export function createStandalone(dataDir, config = {}) {
   // ---- 自己点検 (単体版で機械的に分かるものだけ) ----
   const dockerOk = () => { try { return spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', timeout: 8000 }).status === 0; } catch { return false; } };
   const selfChecks = async () => [
-    { id: 'self.https', label: 'https で画面を出している', item: 'leak.encrypt', ok: !!config.tls?.cert, detail: config.tls?.cert ? 'https' : 'http のまま (前段のリバースプロキシで https にするか、config.tls を設定)', level: 'check' },
-    { id: 'self.login_lock', label: 'ログイン失敗が続くとロックする', item: 'entry.lockout', ok: true, detail: '同じ名前+接続元で 5 回失敗すると 10 分ロック', level: 'check' },
+    { id: 'self.https', label: 'https で画面を出している', item: 'leak.encrypt', scs: [], ok: !!config.tls?.cert, detail: config.tls?.cert ? 'https' : 'http のまま (前段のリバースプロキシで https にするか、config.tls を設定)', level: 'check' },
+    { id: 'self.login_lock', label: 'ログイン失敗が続くとロックする', item: 'entry.lockout', scs: ['4-1-5-3'], ok: true, detail: '同じ名前+接続元で 5 回失敗すると 10 分ロック', level: 'check' },
     { id: 'self.llm_local', label: 'AI が手元 (社内) にある', item: null, ok: !llm || llm.local, detail: llm ? `${llm.provider} ${llm.base_url}${llm.local ? '' : ' — 社外のサービスです (データが外に出ます)'}` : 'AI なし (規則と記録だけで動きます)', level: 'check' },
     { id: 'self.docker', label: 'docker が使える (調査の使い捨てコンテナ)', item: null, ok: dockerOk(), detail: dockerOk() ? 'docker あり' : 'docker が無い・使えない (調査は実行できません。点検と記録は使えます)', level: 'check' },
   ];

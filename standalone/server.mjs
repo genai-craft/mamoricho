@@ -7,12 +7,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { URL } from 'node:url';
 import { HttpError, id } from '../util.js';
-import { createMamoricho, SETS, ADMIN_RULES, ADMIN_NOTE } from '../index.js';
+import { createMamoricho, SETS, ADMIN_RULES, ADMIN_NOTE, registerExtRoutes } from '../index.js';
 import { createStandalone } from './ports.mjs';
 
 const HERE = path.dirname(new URL(import.meta.url).pathname); const UI = path.join(HERE, 'ui'); const PKG_UI = path.join(HERE, '..', 'ui');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
-const STATIC = { '/': path.join(UI, 'index.html'), '/index.html': path.join(UI, 'index.html'), '/shell.js': path.join(UI, 'shell.js'), '/shell.css': path.join(UI, 'shell.css'), '/mamoricho.js': path.join(PKG_UI, 'mamoricho.js'), '/icon.svg': path.join(UI, 'icon.svg') };
+const STATIC = { '/': path.join(UI, 'index.html'), '/index.html': path.join(UI, 'index.html'), '/shell.js': path.join(UI, 'shell.js'), '/shell.css': path.join(UI, 'shell.css'), '/mamoricho.js': path.join(PKG_UI, 'mamoricho.js'), '/mamoricho-scs.js': path.join(PKG_UI, 'mamoricho-scs.js'), '/icon.svg': path.join(UI, 'icon.svg') };
 
 export function createServer({ dataDir, config = {} } = {}) {
   const sa = createStandalone(dataDir, config); const { ports, auth, approvals, notifications } = sa;
@@ -105,6 +105,8 @@ export function createServer({ dataDir, config = {} } = {}) {
   route('GET', '/api/v1/probe/authz/runs/:id', ({ actor, params }) => authz.getRun(actor, params.id));
   route('GET', '/api/v1/probe/authz/status', ({ actor, query }) => { ports.requireRole(actor, 'viewer'); return authz.status(query.target_id); });
   route('GET', '/api/v1/probe/security-summary', ({ actor }) => mm.securitySummary(actor));
+  // ---- SCS 評価制度の点検・台帳・規程・全員に知らせる (routes.js。言箱 OS と同じ一覧) ----
+  registerExtRoutes(route, mk);
 
   async function handle(req, res) {
     const url = new URL(req.url, 'http://x'); const p = url.pathname; const reqId = id('req');

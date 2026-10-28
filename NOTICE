@@ -13,3 +13,8 @@ Apache License 2.0 が与える権利とは別のものです。Apache License 2
 Third-party notices:
 - 点検の基準として、個人情報保護委員会「大規模な漏えい等事案を踏まえた対応について (注意喚起)」(2026-10-07) および
   WARNING (令和 8 年 10 月 7 日改訂) を参照しています。基準の文書そのものは含みません。
+- SCS 評価制度の評価基準 (core/scs-criteria.js): 出典「★3・★4要求事項及び評価基準」(経済産業省)
+  https://www.meti.go.jp/policy/netsecurity/docs/scs/scs_3.xlsx (2026年10月27日に利用)。公共データ利用規約 (第1.0版) に従って
+  利用しています。要求事項・評価基準の文言は原文のまま (読みがなを落とし、行頭の「・」を外しただけ)。ふつうの言葉の質問・手がかり
+  (core/scs-guide.js)・規程のひな形 (core/policy-templates.js) は、これをもとに genai-craft (生成AI工房) が作成したもので、
+  国や IPA の公式の文言・ひな形ではありません。

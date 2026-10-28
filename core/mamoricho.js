@@ -684,5 +684,7 @@ export class Mamoricho {
     if (!s.answered) this.ports.notify({ kind: 'mamoricho', severity: 'info', title: `${this.ports.brand.product}: 最初の点検を始めましょう`, body: '15 分ほどで、基本の対策ができているかを記録に残せます', dedupe_key: 'mamoricho.start', link: 'mamoricho:check' });
     // 言箱自身の管理者の継続監視 (定期確認): 1 日 1 回、監査ログから管理者のイベントを拾ってルールを当て、記録に残す。疑いがあれば知らせる
     try { const a = await this.selfAdminCheck(sys, { save: true }); if (a.warn) this.ports.notify({ kind: 'mamoricho', severity: 'warning', title: `${this.ports.brand.product}: ${this.ports.brand.os}の管理者の操作に疑いが ${a.warn} 件`, body: a.signs.filter(x => x.level === 'warn').slice(0, 3).map(x => x.label).join(' / '), dedupe_key: 'mamoricho.admin_self', link: 'mamoricho:admin' }); } catch { /* 次回 */ }
+    // SCS 評価制度の点検: 定期の点検の期限・改善の計画の期限・★の有効期限 (core/scs.js)
+    if (this.scs) { try { await this.scs.tick(sys); } catch { /* 次回 */ } }
   }
 }

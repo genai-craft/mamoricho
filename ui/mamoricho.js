@@ -53,6 +53,8 @@ async function renderHome(c, p, win) {
   c.append(el('h1', {}, 'まもり帳'), el('p', { class: 'sub' }, '「基本的なところからザル」と言われないために。できていることを確かめて、いつ・誰が・何で確かめたかを記録に残します。責任を肩代わりはできませんが、いつでも相談できます。'));
   let s, d; try { [s, d] = await Promise.all([GET('/mamoricho/summary'), GET('/probe/security-summary')]); } catch (e) { c.append(el('div', { class: 'notice err' }, e.message)); return; }
   renderDashboard(c, d, win);
+  // SCS 評価制度の準備と、自分あてのお知らせ (ui/mamoricho-scs.js があるとき)
+  if (AIOS.mamorichoExt) { try { const [sc, ib] = await Promise.all([GET('/mamoricho/scs/summary'), GET('/mamoricho-ack/pending')]); const L = sc.target_level === 4 ? sc.level4 : sc.level3; c.append(el('div', { style: { ...CARD, borderColor: '#4338ca' } }, el('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, el('b', { style: { fontSize: '15px' } }, `★ SCS 評価制度 ★${sc.target_level} の準備`), el('span', {}, `回答 ${L.answered} / ${L.total}`), L.answered ? el('span', {}, `目安 ${L.score} 点`) : '', sc.due.length ? el('span', { style: { color: '#0891b2', fontWeight: 700 } }, `定期の点検 ${sc.due.length} 件`) : '', sc.plans.filter(x => x.overdue).length ? el('span', { style: { color: '#dc2626', fontWeight: 700 } }, `計画の期限切れ ${sc.plans.filter(x => x.overdue).length} 件`) : '', ib.notices.length ? el('button', { class: 'btn sm', onclick: () => win.navigate('inbox') }, `📬 未確認のお知らせ ${ib.notices.length}`) : '', el('button', { class: 'btn sm primary', style: { marginLeft: 'auto' }, onclick: () => win.navigate('scs') }, '開く')), el('div', { class: 'sub', style: { fontSize: '12px', marginTop: '4px' } }, '取引先にセキュリティの対策を聞かれたときに出せる記録を、経済産業省の評価基準に沿って作ります。'))); } catch { /* SCS の口が無い版 */ } }
   const color = s.score >= 80 ? '#16a34a' : s.score >= 50 ? '#d97706' : '#dc2626';
   const top = el('div', { style: CARD });
   top.append(el('div', { class: 'row', style: { alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' } }, el('span', { style: { fontSize: '40px', fontWeight: 800, color } }, s.answered ? `${s.score}` : '—'), el('span', { class: 'sub', style: { margin: 0 } }, s.answered ? `点 (100 点満点。できている=1、一部=0.5)` : 'まだ点検していません'), el('span', { style: { marginLeft: 'auto' } }, `${s.answered} / ${s.total} 項目に回答`)),
@@ -301,7 +303,8 @@ async function renderRecords(c, p, win) {
   let d; try { d = await GET('/mamoricho/records?limit=300'); } catch (e) { c.append(el('div', { class: 'notice err' }, e.message)); return; }
   c.append(el('div', { class: 'notice ' + (d.chain.ok ? 'ok' : 'err') }, d.chain.ok ? `${d.chain.count} 件。つながりと署名は正常です` : `異常: ${d.chain.reason} (${d.chain.broken_at} 件目)`));
   c.append(el('div', { class: 'row', style: { gap: '8px', marginBottom: '8px' } }, isAdmin() ? el('button', { class: 'btn sm', onclick: () => { const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), chain: d.chain, records: d.records }, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `mamoricho-records-${new Date().toISOString().slice(0, 10)}.json`; a.click(); } }, 'JSON で書き出す (管理者)') : ''));
-  const KINDS = { answer: '点検の答え', selfcheck: '自己点検', probe: '調査', review: '見直しを終えた', emergency_card: 'もしものときのカード', incident_note: '初動の記録', incident_probe: '初動の調査', snapshot: 'スナップショット', inquiry: '対話で調べた', admin_compromise_signs: `管理者の点検 (${B.os}自身)`, admin_event_analysis: '管理者の AI 説明', api_authz_spec: 'API の一覧', api_authz_policy_change: 'API の期待する権限', api_authz_scan: 'API の権限検査', api_authz_finding: 'API の権限の疑い' };
+  const KINDS = { answer: '点検の答え', selfcheck: '自己点検', probe: '調査', review: '見直しを終えた', emergency_card: 'もしものときのカード', incident_note: '初動の記録', incident_probe: '初動の調査', snapshot: 'スナップショット', inquiry: '対話で調べた', admin_compromise_signs: `管理者の点検 (${B.os}自身)`, admin_event_analysis: '管理者の AI 説明', api_authz_spec: 'API の一覧', api_authz_policy_change: 'API の期待する権限', api_authz_scan: 'API の権限検査', api_authz_finding: 'API の権限の疑い',
+    scs_answer: 'SCS の答え', scs_periodic: 'SCS の定期の点検', scs_profile: '会社の情報 (SCS)', scs_review_request: 'SCS の確認の依頼', scs_review_comment: 'SCS の助言', scs_expert_confirm: 'SCS 専門家の確認', scs_expert_return: 'SCS 差し戻し', scs_declaration: 'SCS 経営層の宣誓', scs_review_withdraw: 'SCS 依頼の取り下げ', ledger: '台帳', ledger_review: '台帳の見直し', notice: '全員に知らせた', notice_ack: 'お知らせの確認', notice_close: 'お知らせの締め切り', policy_adopt: '規程の採用', policy_review: '規程のレビュー' };
   const t = el('table', { class: 'tbl' }, el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, '日時'), el('th', {}, '誰が'), el('th', {}, '種類'), el('th', {}, '内容'))));
   for (const r of d.records) {
     const pl = r.payload || {}; let body = '';
@@ -319,6 +322,16 @@ async function renderRecords(c, p, win) {
     else if (r.kind === 'api_authz_finding') body = `${pl.target_name}: ${pl.check} ${pl.check_label || ''} — ${pl.method} ${pl.url_path} (${pl.actor_label}) ${pl.reason || ''}`;
     else if (r.kind === 'api_authz_policy_change') body = `${pl.target_name}: 版 ${pl.version} (${(pl.changes || []).length} 件の変更)${pl.note ? ' — ' + pl.note : ''}`;
     else if (r.kind === 'api_authz_spec') body = `${pl.target_name}: ${pl.operations} 操作 (${pl.source === 'openapi' ? 'OpenAPI' : '手書き'})`;
+    else if (r.kind === 'scs_answer') body = el('span', {}, pill(pl.status), ' ', el('code', { style: { fontSize: '11px' } }, pl.criterion_id), pl.note ? ` — ${pl.note}` : '', pl.plan?.action ? ` (計画: ${pl.plan.action})` : '');
+    else if (r.kind === 'scs_periodic') body = `${pl.criterion_id}: ${pl.done_at} に点検${pl.note ? ' — ' + pl.note : ''}`;
+    else if (r.kind.startsWith('scs_')) body = `${pl.level ? '★' + pl.level + ' ' : ''}${pl.review_id || ''}${pl.snapshot_hash ? ' ・ 写し ' + pl.snapshot_hash.slice(0, 12) + '…' : ''}${pl.expert?.name ? ' ・ ' + pl.expert.name : ''}${pl.declaration?.name ? ' ・ ' + pl.declaration.name : ''}${pl.text ? ' ・ ' + pl.text.slice(0, 60) : ''}${pl.company ? pl.company : ''}`;
+    else if (r.kind === 'ledger') body = `${pl.kind_label}: ${{ add: '足した', update: '直した', remove: '消した' }[pl.op] || pl.op} ${Object.values(pl.data || pl.previous || {}).filter(v => v !== '' && v !== false).slice(0, 2).join(' / ')}`;
+    else if (r.kind === 'ledger_review') body = `${pl.kind_label}: ${pl.rows} 行を見直した`;
+    else if (r.kind === 'notice') body = `${pl.title} (対象 ${pl.audience} 人)`;
+    else if (r.kind === 'notice_ack') body = `${pl.title} を確認`;
+    else if (r.kind === 'notice_close') body = `${pl.title}: 確認 ${pl.acks}・まだ ${pl.pending}`;
+    else if (r.kind === 'policy_adopt') body = `${pl.title} 第${pl.version}版を採用 (本文 ${String(pl.sha256 || '').slice(0, 12)}…${pl.left_blank ? `・【要記入】${pl.left_blank}` : ''})`;
+    else if (r.kind === 'policy_review') body = `${pl.title}: ${pl.name || ''} (${pl.paragraphs} 段落) ${Object.entries(pl.counts || {}).map(([k, v]) => `${k} ${v}`).join(' / ')}`;
     else body = JSON.stringify(pl).slice(0, 120);
     t.append(el('tr', {}, el('td', {}, r.seq), el('td', {}, fmtTime(r.at)), el('td', {}, r.by_name), el('td', {}, KINDS[r.kind] || r.kind), el('td', {}, body)));
   }
@@ -658,11 +671,16 @@ async function renderAuthz(c, p, win) {
 AIOS.apps.mamoricho = {
   async mount(win, opts) {
     try { Object.assign(B, (await GET('/mamoricho/brand')).brand || {}); } catch { /* 既定のまま */ }
+    AIOS.mamorichoBrand = B;
     const W = (fn) => (c, p) => fn(c, p, win);
+    // SCS 評価制度・規程・台帳・全員に知らせる (ui/mamoricho-scs.js)。after の後ろと、メニューの最後 (tail) に足す。hidden はメニューに出さない
+    const ext = AIOS.mamorichoExt || { routes: {} }; const extR = (keys) => Object.fromEntries(keys.map(k => [k, { ...ext.routes[k], render: W(ext.routes[k].render) }]));
+    const extKeys = Object.keys(ext.routes); const extMenu = extR(extKeys.filter(k => !ext.routes[k].hidden && !ext.routes[k].tail)); const extTail = extR(extKeys.filter(k => ext.routes[k].tail)); const extHidden = extR(extKeys.filter(k => ext.routes[k].hidden));
     // route と params の両方があるときは、既定の描画 (params なし) をせずに下で 1 回だけ描く (2 回描くと、非同期の中身が二重に足される)
     const app = routedApp(win, { title: 'まもり帳', defaultRoute: opts.route && opts.params ? null : (opts.route || 'home'), routes: {
       home: { label: 'ホーム', icon: '🏠', render: W(renderHome) },
       check: { label: '点検', icon: '☑', render: W(renderCheck) },
+      ...extMenu,
       targets: { label: '対象', icon: '🖥', render: W(renderTargets) },
       records: { label: '記録', icon: '📜', render: W(renderRecords) },
       emergency: { label: 'もしものとき', icon: '🚨', sep: true, render: W(renderEmergency) },
@@ -671,6 +689,7 @@ AIOS.apps.mamoricho = {
       // メニューには出さない (ホーム・点検・対象・もしものとき から入る)。メニューが並ぶと何をいつやるか迷うため
       admin: { label: '管理者アカウントの点検', icon: '🔑', hidden: true, render: W(renderAdmin) },
       authz: { label: 'API の権限を確かめる', icon: '🔐', hidden: true, render: W(renderAuthz) },
+      ...extTail, ...extHidden,
     } });
     if (opts.route && opts.params) app.render(opts.route, opts.params);
   },
