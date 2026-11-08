@@ -93,7 +93,7 @@ function evidenceLine(it, win) {
   if (e.emergency) chip(`🚨 もしものときの連絡先 ${e.emergency.filled}/${e.emergency.of}`, e.emergency.filled >= 3 ? '#16a34a' : '#94a3b8', () => win.navigate('emergency'));
   return out.childNodes.length ? out : '';
 }
-const AIOS_B = () => AIOS.mamorichoBrand || { os: '言箱', product: 'まもり帳' };
+const AIOS_B = () => AIOS.mamorichoBrand || { os: 'この箱', product: 'まもり帳' };
 function auditDialog(a) {
   const c = el('div', {}, el('h2', {}, a.label));
   if (a.kind === 'users') { const t = el('table', { class: 'tbl' }, el('tr', {}, el('th', {}, '日時'), el('th', {}, '操作'), el('th', {}, '誰が'), el('th', {}, '対象'))); for (const r of a.recent || []) t.append(el('tr', {}, el('td', {}, fmtTime(r.at)), el('td', {}, r.action), el('td', {}, r.by || ''), el('td', {}, String(r.detail?.username || r.target || '')))); c.append(sub('箱の監査ログ (改ざんを検知できる記録) から。申請と承認そのものは、台帳「管理者 ID」の「付与の承認」や申請の記録で残してください。'), t); }

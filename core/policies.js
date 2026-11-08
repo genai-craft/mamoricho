@@ -35,7 +35,10 @@ export class Policies {
     const v = (x, what) => (String(x || '').trim() || MISSING(what));
     return { date: new Date().toISOString().slice(0, 10), company: v(p.company, '会社名'), ceo: v(p.ceo, '代表者の役職と氏名'), lead: v(p.lead || ct.lead, '統括する役員'), it: v(p.it || ct.it, '担当部署・担当者'), where: v(p.where, '規程の置き場 (例: AI NAS の「規程」フォルダ)'),
       lead_contact: v(ct.lead, '統括する役員の連絡先'), it_contact: v(ct.it, '担当部署の連絡先'), vendor: v(ct.vendor, 'システム保守の会社'), forensics: v(ct.forensics, '専門の会社'), insurance: v(ct.insurance, 'サイバー保険の窓口'), police: v(ct.police, '警察の相談窓口'), ppc: v(ct.ppc, '個人情報保護委員会の報告の窓口'),
-      vulndb: `${B.os}の脆弱性情報 (署名つきの配布)`, os: B.os };
+      vulndb: `${B.os}の脆弱性情報 (署名つきの配布)`, os: B.os,
+      /* 脆弱性の情報源の表の 1 行目。組み込み先が脆弱性情報を差し出すとき (ports.vulns) だけ、それを自動の情報源として書く */
+      vuln_row: this.ports.vulns ? `| ${B.os}の脆弱性情報 (署名つきの配布) | ${B.product} (対象・機器との突き合わせ) | 毎日 (自動) |`
+        : '| JVN iPedia (IPA・JPCERT/CC の脆弱性対策情報データベース) | 【要記入: 例: JVN の新着のメール配信】 | 【要記入: 例: 毎週】 |' };
   }
   // 規程ごとの「全員に知らせる」が要る評価基準
   noticeCriteria(tid) { return SCS_CRITERIA.filter(c => SCS_GUIDE[c.id]?.policy === tid && (SCS_GUIDE[c.id].k === 'notice' || /周知/.test(c.text))).map(c => c.id); }
