@@ -16,25 +16,66 @@ const CARD = { padding: '14px 16px', border: '1px solid var(--line, #e5e7eb)', b
 const B = { product: 'まもり帳', os: '言箱', os_en: 'Kotohako', ai: '箱の中の AI', store: '箱の中 (AI NAS の「まもり帳」フォルダ)' };
 
 // ---------- ホーム ----------
-// ダッシュボード: メニューが並んでも「何を・いつ・どうしたらいいか」で迷わないように、最優先の 1 つ・やることの順番・予定・対象ごとの最終確認を 1 か所に
+// ダッシュボード: メニューが並んでも「何を・いつ・どうしたらいいか」で迷わないように、ひと目で分かる帯・最優先の 1 つ・やることの順番・予定・対象ごとの最終確認を 1 か所に
 const LV = { warn: ['#dc2626', '⚠ 疑い'], check: ['#d97706', '👀 確認'], todo: ['#2563eb', '▶ 次にやること'], ok: ['#16a34a', '✅ いまは落ち着いています'] };
-const STEP = { done: ['✅', '#16a34a'], partial: ['◐', '#d97706'], todo: ['○', '#6b7280'], na: ['－', '#cbd5e1'] };
+const STEP = { done: ['済み', '#16a34a'], partial: ['途中', '#d97706'], todo: ['これから', '#6b7280'], na: ['対象外', '#94a3b8'] };
 const goTo = (win, x) => { if (!x?.route || x.route === 'home') return; if (x.route === 'targets' && x.target_id) return win.navigate('targets', { focus: x.target_id }); win.navigate(x.route, x.params || null); };
+// 絵の部品 (外部のライブラリは使わない。SVG とスタイルだけ)。文字の色は画面のテーマ (明るい・暗い) に従わせ、決め打ちしない
+const TRACK = 'rgba(127,127,127,.2)';
+const svgEl = (tag, attrs = {}, ...kids) => { const e = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined && v !== false) e.setAttribute(k, String(v)); for (const k of kids.flat()) if (k) e.append(k); return e; };
+// 輪のグラフ。segs = [[割合 0〜1, 色], …] を 12 時から時計回りに並べる。links を渡すと輪を鎖のように区切る (記録のつながり)
+const ring = (segs, big, small, opt = {}) => {
+  const R = 33, W = 9, C = 2 * Math.PI * R; let off = 0;
+  const g = svgEl('svg', { viewBox: '0 0 80 80', width: 92, height: 92, 'aria-hidden': 'true', style: 'display:block;transform:rotate(-90deg)' }, svgEl('circle', { cx: 40, cy: 40, r: R, fill: 'none', stroke: TRACK, 'stroke-width': W }));
+  if (opt.links) { const one = C / opt.links; g.append(svgEl('circle', { cx: 40, cy: 40, r: R, fill: 'none', stroke: segs[0][1], 'stroke-width': W, 'stroke-dasharray': `${(one - 4).toFixed(2)} 4`, 'stroke-dashoffset': '-2' })); }
+  else for (const [f, color] of segs) { const len = Math.max(0, Math.min(1 - off, f || 0)) * C; if (len > 0.4) g.append(svgEl('circle', { cx: 40, cy: 40, r: R, fill: 'none', stroke: color, 'stroke-width': W, 'stroke-dasharray': `${len.toFixed(2)} ${(C - len).toFixed(2)}`, 'stroke-dashoffset': (-off * C).toFixed(2) })); off += Math.max(0, f || 0); }
+  return el('div', { style: { position: 'relative', width: '92px', height: '92px', flex: '0 0 92px' } }, g, el('div', { style: { position: 'absolute', inset: '0', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', lineHeight: '1.1' } }, el('div', { style: { fontSize: String(big).length > 4 ? '17px' : String(big).length > 3 ? '21px' : '26px', fontWeight: 800, color: opt.color || undefined } }, String(big)), small ? el('div', { class: 'sub', style: { margin: 0, fontSize: '10.5px' } }, small) : ''));
+};
+// ひと目で分かる帯の 1 枚 (押すとその画面へ)
+const glanceTile = (graphic, title, main, note, noteColor, onclick) => el('button', { class: 'btn', style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', textAlign: 'center', padding: '14px 10px 12px', borderRadius: '12px', minWidth: 0 }, onclick }, el('div', { class: 'sub', style: { margin: 0, fontSize: '12px', fontWeight: 700 } }, title), graphic, el('div', { style: { minWidth: 0 } }, el('div', { style: { fontSize: '14px', fontWeight: 700, margin: '0 0 2px' } }, main), el('div', { class: noteColor ? '' : 'sub', style: { margin: 0, fontSize: '12px', color: noteColor || undefined, fontWeight: noteColor ? 700 : undefined } }, note)));
+function renderGlance(c, s, d, sc, win) {
+  const g = el('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: '10px', marginBottom: '12px' } });
+  // (a) 点検の点数
+  const color = s.score >= 80 ? '#16a34a' : s.score >= 50 ? '#d97706' : '#dc2626'; const left = s.total - s.answered;
+  g.append(glanceTile(ring(s.answered ? [[s.score / 100, color]] : [], s.answered ? s.score : '—', s.answered ? '点' : '', { color: s.answered ? color : undefined }), '点検 (基本の対策)', `${s.answered} / ${s.total} 項目に回答`, !s.answered ? 'まだ点検していません' : left ? `あと ${left} 項目` : '全部の項目に回答済み', null, () => win.navigate('check')));
+  // (b) 対象の診断 (使える対象のうち、診断したもの。30 日を超えたものは色を変える)
+  const us = d.targets.filter(t => t.usable); const done = us.filter(t => t.last_snapshot_at); const stale = done.filter(t => t.stale).length; const fresh = done.length - stale; const wait = d.targets.filter(t => t.pending).length;
+  g.append(glanceTile(ring(us.length ? [[fresh / us.length, '#16a34a'], [stale / us.length, '#d97706']] : [], us.length ? `${done.length}/${us.length}` : '—', us.length ? '診断済み' : ''), '対象の診断', us.length ? `${us.length} 件の対象` : wait ? `登録待ち ${wait} 件` : '対象はまだありません',
+    !us.length ? '対象を登録すると出ます' : stale ? `${stale} 件は 30 日以上前` : done.length < us.length ? `${us.length - done.length} 件はまだ診断していません` : '30 日以内に診断済み', us.length && (stale || done.length < us.length) ? '#d97706' : null, () => win.navigate('targets')));
+  // (c) 箱の自己点検
+  const sf = s.self_failed.length; const allOk = s.self.total > 0 && s.self.ok >= s.self.total;
+  g.append(glanceTile(ring(s.self.total ? [[s.self.ok / s.self.total, allOk ? '#16a34a' : '#d97706']] : [], s.self.total ? `${s.self.ok}/${s.self.total}` : '—', s.self.total ? '達成' : ''), `${B.os}の自己点検`, `${s.self.ok} / ${s.self.total} が達成`, sf ? `${sf} 件を確かめてください` : 'すべて達成', sf ? '#d97706' : null, () => selfDetail(win)));
+  // (d) 記録の鎖
+  g.append(glanceTile(ring([[1, s.chain.ok ? '#16a34a' : '#dc2626']], s.chain.count ?? 0, '件', { links: 12 }), '記録 (署名つきの鎖)', s.chain.ok ? '✓ つながりと署名は正常' : '異常', s.chain.ok ? '書き換えると分かります' : String(s.chain.reason || '記録を確かめてください'), s.chain.ok ? null : '#dc2626', () => win.navigate('records')));
+  // SCS 評価制度の回答の進み (その口がある版だけ)
+  if (sc) { const L = sc.target_level === 4 ? sc.level4 : sc.level3; g.append(glanceTile(ring(L.total ? [[L.answered / L.total, '#6366f1']] : [], L.total ? `${Math.round(L.answered / L.total * 100)}%` : '—', '回答'), `SCS 評価制度 ★${sc.target_level} の準備`, `回答 ${L.answered} / ${L.total}`, L.answered ? `目安 ${L.score} 点` : 'まだ答えていません', null, () => win.navigate('scs'))); }
+  c.append(g);
+}
 function renderDashboard(c, d, win) {
   const pr = d.priority; const lv = LV[pr.level] || LV.todo;
-  const top = el('div', { style: { ...CARD, borderColor: lv[0], borderWidth: '2px' } });
+  const top = el('div', { style: { ...CARD, borderColor: lv[0], borderWidth: '2px', borderLeftWidth: '8px', backgroundImage: `linear-gradient(90deg, ${lv[0]}1f, ${lv[0]}00 70%)`, marginBottom: '10px' } });
   top.append(el('div', { style: { fontSize: '12px', color: lv[0], fontWeight: 700 } }, `${lv[1]} — いちばん先にやること`), el('div', { style: { fontSize: '20px', fontWeight: 800, margin: '4px 0' } }, pr.title), el('div', { style: { fontSize: '13px' } }, pr.why),
     pr.route !== 'home' ? el('div', { style: { marginTop: '8px' } }, el('button', { class: 'btn primary', onclick: () => goTo(win, pr) }, 'ここから始める')) : '');
   c.append(top);
-  const n = d.counts; const chip = (label, v, color, route, params) => el('button', { class: 'btn', style: { textAlign: 'left', padding: '8px 12px', borderColor: v ? color : undefined }, onclick: () => win.navigate(route, params || null) }, el('div', { style: { fontSize: '22px', fontWeight: 800, lineHeight: 1.1, color: v ? color : 'var(--muted, #6b7280)' } }, String(v)), el('div', { class: 'sub', style: { margin: 0, fontSize: '12px' } }, label));
-  c.append(el('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap', marginBottom: '12px', alignItems: 'stretch' } }, chip('管理者の操作に確認が必要', n.admin_needs_check, '#dc2626', 'admin'), chip('API の権限に確認が必要', n.authz_needs_check, '#dc2626', 'authz'), chip('機械・HP の兆候 (疑い)', n.sign_warn, '#dc2626', 'targets'), chip('まだ診断していない対象', n.unchecked_targets + n.pending_targets, '#d97706', 'targets'), chip('30 日以上診断していない', n.stale_targets, '#d97706', 'targets'),
+  // 5 つの数字: 0 のときは薄く、1 以上は色つきのバッジで目立たせる
+  const n = d.counts; const chip = (label, v, color, route, params) => el('button', { class: 'btn', style: { display: 'flex', alignItems: 'center', gap: '8px', textAlign: 'left', padding: '6px 12px 6px 6px', borderRadius: '999px', borderColor: v ? color : undefined, opacity: v ? 1 : .6 }, onclick: () => win.navigate(route, params || null) },
+    el('span', { style: { minWidth: '30px', height: '30px', padding: '0 8px', boxSizing: 'border-box', borderRadius: '999px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px', fontWeight: 800, background: v ? color : TRACK, color: v ? '#fff' : 'var(--muted, #6b7280)' } }, String(v)), el('span', { style: { fontSize: '12px', fontWeight: v ? 700 : 400 } }, label));
+  c.append(el('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap', marginBottom: '12px', alignItems: 'center' } }, chip('管理者の操作に確認が必要', n.admin_needs_check, '#dc2626', 'admin'), chip('API の権限に確認が必要', n.authz_needs_check, '#dc2626', 'authz'), chip('機械・HP の兆候 (疑い)', n.sign_warn, '#dc2626', 'targets'), chip('まだ診断していない対象', n.unchecked_targets + n.pending_targets, '#d97706', 'targets'), chip('30 日以上診断していない', n.stale_targets, '#d97706', 'targets'),
     el('div', { class: 'sub', style: { margin: '0 0 0 auto', fontSize: '12px', alignSelf: 'center' } }, d.last_checked_at ? `最終確認 ${fmtTime(d.last_checked_at)}` : 'まだ何も確認していません')));
   const grid = el('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '12px', marginBottom: '12px' } });
-  const steps = el('div', { style: { ...CARD, marginBottom: 0 } }, el('h2', { style: { marginTop: 0 } }, 'やることの順番'), el('div', { class: 'sub', style: { fontSize: '12px' } }, '上から順に。終わったものは ✅、途中は ◐。月 1 回の診断と四半期の見直しを続けるのが現実的な守りです。'));
-  d.steps.forEach((x, i) => { const st = STEP[x.state] || STEP.todo; steps.append(el('div', { class: 'row', style: { alignItems: 'center', gap: '10px', padding: '6px 0', borderTop: '1px solid var(--line, #eee)', cursor: 'pointer' }, onclick: () => win.navigate(x.route, x.params || null) }, el('span', { style: { color: st[1], fontWeight: 800, width: '18px' } }, st[0]), el('div', { style: { flex: 1 } }, el('div', { style: { fontWeight: x.state === 'done' ? 400 : 700, opacity: x.state === 'na' ? .6 : 1 } }, `${i + 1}. ${x.label}`), el('div', { class: 'sub', style: { margin: 0, fontSize: '12px' } }, x.detail)))); });
-  const sch = el('div', { style: { ...CARD, marginBottom: 0 } }, el('h2', { style: { marginTop: 0 } }, 'いつ (予定)'));
+  // やることの順番: 縦のステッパー (丸と線。終わった = 緑の ✓、途中 = 橙、これから = 灰色)
+  const steps = el('div', { style: { ...CARD, marginBottom: 0 } }, el('h2', { style: { marginTop: 0 } }, 'やることの順番'), el('div', { class: 'sub', style: { fontSize: '12px', marginBottom: '10px' } }, '上から順に。終わったものは緑の ✓、途中は橙。月 1 回の診断と四半期の見直しを続けるのが現実的な守りです。'));
+  d.steps.forEach((x, i) => {
+    const st = STEP[x.state] ? x.state : 'todo'; const col = STEP[st][1]; const last = i === d.steps.length - 1;
+    const face = st === 'done' ? { background: col, color: '#fff', border: `2px solid ${col}` } : st === 'partial' ? { background: col, color: '#fff', border: `2px solid ${col}` } : st === 'na' ? { border: `2px dashed ${col}`, color: 'var(--muted, #6b7280)' } : { border: '2px solid rgba(127,127,127,.55)', color: 'var(--muted, #6b7280)' };
+    const circle = el('div', { style: { width: '26px', height: '26px', boxSizing: 'border-box', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 800, flex: '0 0 26px', ...face } }, st === 'done' ? '✓' : st === 'na' ? '－' : String(i + 1));
+    const rail = el('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '0 0 26px' } }, circle, last ? '' : el('div', { style: { flex: 1, width: '2px', minHeight: '12px', margin: '2px 0', background: st === 'done' ? col : TRACK } }));
+    steps.append(el('div', { style: { display: 'flex', gap: '10px', alignItems: 'stretch', cursor: 'pointer' }, onclick: () => win.navigate(x.route, x.params || null) }, rail,
+      el('div', { style: { flex: 1, minWidth: 0, paddingBottom: last ? 0 : '12px' } }, el('div', { class: 'row', style: { gap: '8px', alignItems: 'baseline', flexWrap: 'nowrap' } }, el('div', { style: { flex: 1, minWidth: 0, fontWeight: st === 'done' ? 400 : 700, opacity: st === 'na' ? .6 : 1 } }, x.label), el('span', { style: { fontSize: '11px', fontWeight: 700, color: col, whiteSpace: 'nowrap' } }, STEP[st][0])), el('div', { class: 'sub', style: { margin: 0, fontSize: '12px' } }, x.detail))));
+  });
+  const sch = el('div', { style: { ...CARD, marginBottom: 0, alignSelf: 'start' } }, el('h2', { style: { marginTop: 0 } }, 'いつ (予定)'));
   if (!d.schedule.length) sch.append(el('div', { class: 'sub' }, '対象を登録して診断すると、次の予定がここに出ます。'));
-  for (const x of d.schedule) sch.append(el('div', { class: 'row', style: { gap: '8px', padding: '5px 0', borderTop: '1px solid var(--line, #eee)', fontSize: '13px', cursor: 'pointer' }, onclick: () => goTo(win, x) }, el('span', { style: { color: x.overdue ? '#dc2626' : 'var(--muted, #6b7280)', fontWeight: 700, minWidth: '96px' } }, new Date(x.at).toLocaleDateString('ja-JP') + (x.overdue ? ' 超過' : '')), el('span', {}, x.label)));
+  for (const x of d.schedule) sch.append(el('div', { class: 'row', style: { gap: '8px', padding: '6px 0', borderTop: '1px solid var(--line, #eee)', fontSize: '13px', cursor: 'pointer', flexWrap: 'nowrap', alignItems: 'baseline' }, onclick: () => goTo(win, x) }, el('span', { style: { display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', flex: '0 0 8px', background: x.overdue ? '#dc2626' : 'rgba(127,127,127,.55)' } }), el('span', { style: { color: x.overdue ? '#dc2626' : 'var(--muted, #6b7280)', fontWeight: 700, minWidth: '96px', whiteSpace: 'nowrap' } }, new Date(x.at).toLocaleDateString('ja-JP') + (x.overdue ? ' 超過' : '')), el('span', {}, x.label)));
   grid.append(steps, sch); c.append(grid);
   if (d.targets.length) {
     const t = el('table', { class: 'tbl' }, el('thead', {}, el('tr', {}, el('th', {}, '対象'), el('th', {}, '最終診断'), el('th', {}, '兆候'), el('th', {}, '管理者'), el('th', {}, 'API の権限'), el('th', {}, ''))));
@@ -51,15 +92,22 @@ function renderDashboard(c, d, win) {
 }
 async function renderHome(c, p, win) {
   c.append(el('h1', {}, 'まもり帳'), el('p', { class: 'sub' }, '「基本的なところからザル」と言われないために。できていることを確かめて、いつ・誰が・何で確かめたかを記録に残します。責任を肩代わりはできませんが、いつでも相談できます。'));
+  // SCS 評価制度の準備と、自分あてのお知らせ (ui/mamoricho-scs.js があるとき)。その口が無い版では出さない
+  const ext = AIOS.mamorichoExt ? Promise.all([GET('/mamoricho/scs/summary'), GET('/mamoricho-ack/pending')]).catch(() => null) : Promise.resolve(null);
   let s, d; try { [s, d] = await Promise.all([GET('/mamoricho/summary'), GET('/probe/security-summary')]); } catch (e) { c.append(el('div', { class: 'notice err' }, e.message)); return; }
+  const x = await ext; const sc = x ? x[0] : null; const ib = x ? x[1] : null;
+  // 並び: ひと目で分かる帯 → 先にやること → 順番と予定 → 対象 → 点検 → その他
+  renderGlance(c, s, d, sc, win);
   renderDashboard(c, d, win);
-  // SCS 評価制度の準備と、自分あてのお知らせ (ui/mamoricho-scs.js があるとき)
-  if (AIOS.mamorichoExt) { try { const [sc, ib] = await Promise.all([GET('/mamoricho/scs/summary'), GET('/mamoricho-ack/pending')]); const L = sc.target_level === 4 ? sc.level4 : sc.level3; c.append(el('div', { style: { ...CARD, borderColor: '#4338ca' } }, el('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, el('b', { style: { fontSize: '15px' } }, `★ SCS 評価制度 ★${sc.target_level} の準備`), el('span', {}, `回答 ${L.answered} / ${L.total}`), L.answered ? el('span', {}, `目安 ${L.score} 点`) : '', sc.due.length ? el('span', { style: { color: '#0891b2', fontWeight: 700 } }, `定期の点検 ${sc.due.length} 件`) : '', sc.plans.filter(x => x.overdue).length ? el('span', { style: { color: '#dc2626', fontWeight: 700 } }, `計画の期限切れ ${sc.plans.filter(x => x.overdue).length} 件`) : '', ib.notices.length ? el('button', { class: 'btn sm', onclick: () => win.navigate('inbox') }, `📬 未確認のお知らせ ${ib.notices.length}`) : '', el('button', { class: 'btn sm primary', style: { marginLeft: 'auto' }, onclick: () => win.navigate('scs') }, '開く')), el('div', { class: 'sub', style: { fontSize: '12px', marginTop: '4px' } }, '取引先にセキュリティの対策を聞かれたときに出せる記録を、経済産業省の評価基準に沿って作ります。'))); } catch { /* SCS の口が無い版 */ } }
+  // 点検: 点数と、内訳の積み上げ棒 1 本
   const color = s.score >= 80 ? '#16a34a' : s.score >= 50 ? '#d97706' : '#dc2626';
+  const KEYS = ['ok', 'partial', 'no', 'unknown', 'na', 'unanswered'];
+  const stack = el('div', { role: 'img', 'aria-label': KEYS.map(k => `${ST[k][0]} ${s.counts[k]}`).join('、'), style: { display: 'flex', gap: '2px', height: '16px', borderRadius: '999px', overflow: 'hidden', background: TRACK } }, ...KEYS.filter(k => s.counts[k] > 0).map(k => el('div', { title: `${ST[k][0]} ${s.counts[k]}`, style: { flex: `${s.counts[k]} 0 0`, minWidth: '4px', background: k === 'unanswered' ? 'transparent' : ST[k][1] } })));
   const top = el('div', { style: CARD });
-  top.append(el('div', { class: 'row', style: { alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' } }, el('span', { style: { fontSize: '40px', fontWeight: 800, color } }, s.answered ? `${s.score}` : '—'), el('span', { class: 'sub', style: { margin: 0 } }, s.answered ? `点 (100 点満点。できている=1、一部=0.5)` : 'まだ点検していません'), el('span', { style: { marginLeft: 'auto' } }, `${s.answered} / ${s.total} 項目に回答`)),
-    el('div', { style: { margin: '8px 0 12px' } }, bar(s.score, color)),
-    el('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } }, ...['ok', 'partial', 'no', 'unknown', 'na', 'unanswered'].map(k => el('span', {}, pill(k), ` ${s.counts[k]}`))),
+  top.append(el('h2', { style: { marginTop: 0 } }, '点検 (基本の対策)'),
+    el('div', { class: 'row', style: { alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' } }, el('span', { style: { fontSize: '40px', fontWeight: 800, color, lineHeight: 1 } }, s.answered ? `${s.score}` : '—'), el('span', { class: 'sub', style: { margin: 0 } }, s.answered ? `点 (100 点満点。できている=1、一部=0.5)` : 'まだ点検していません'), el('span', { style: { marginLeft: 'auto' } }, `${s.answered} / ${s.total} 項目に回答`)),
+    el('div', { style: { margin: '10px 0 8px' } }, stack),
+    el('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } }, ...KEYS.map(k => el('span', { style: { opacity: s.counts[k] ? 1 : .55 } }, pill(k), ' ', el('b', {}, String(s.counts[k]))))),
     el('div', { class: 'row', style: { marginTop: '12px', gap: '8px', flexWrap: 'wrap' } },
       el('button', { class: 'btn primary', onclick: () => win.navigate('check') }, s.answered ? '点検を続ける' : '点検を始める (15 分)'),
       el('button', { class: 'btn', onclick: () => win.navigate('targets') }, '対象を調べる'),
@@ -70,6 +118,7 @@ async function renderHome(c, p, win) {
   if (!s.homework.length) hw.append(el('div', { class: 'notice ok' }, '宿題はありません。四半期ごとの見直しを続けてください。'));
   for (const h of s.homework) hw.append(el('div', { class: 'row', style: { alignItems: 'flex-start', gap: '10px', padding: '8px 0', borderTop: '1px solid var(--line, #eee)' } }, pill(h.status), el('div', { style: { flex: 1 } }, el('div', {}, h.q), el('div', { class: 'sub', style: { margin: '2px 0 0', fontSize: '12px' } }, `最低ライン: ${h.min}`)), el('button', { class: 'btn sm', onclick: () => win.navigate('check', { item: h.id }) }, '答える')));
   c.append(hw);
+  if (sc && ib) { const L = sc.target_level === 4 ? sc.level4 : sc.level3; c.append(el('div', { style: { ...CARD, borderColor: '#4338ca' } }, el('div', { class: 'row', style: { gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, el('b', { style: { fontSize: '15px' } }, `★ SCS 評価制度 ★${sc.target_level} の準備`), el('span', {}, `回答 ${L.answered} / ${L.total}`), L.answered ? el('span', {}, `目安 ${L.score} 点`) : '', sc.due.length ? el('span', { style: { color: '#0891b2', fontWeight: 700 } }, `定期の点検 ${sc.due.length} 件`) : '', sc.plans.filter(x => x.overdue).length ? el('span', { style: { color: '#dc2626', fontWeight: 700 } }, `計画の期限切れ ${sc.plans.filter(x => x.overdue).length} 件`) : '', ib.notices.length ? el('button', { class: 'btn sm', onclick: () => win.navigate('inbox') }, `📬 未確認のお知らせ ${ib.notices.length}`) : '', el('button', { class: 'btn sm primary', style: { marginLeft: 'auto' }, onclick: () => win.navigate('scs') }, '開く')), el('div', { class: 'sub', style: { fontSize: '12px', marginTop: '4px' } }, '取引先にセキュリティの対策を聞かれたときに出せる記録を、経済産業省の評価基準に沿って作ります。'))); }
   // 箱 (OS)の自己点検 + 見直し + 記録
   const grid = el('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px' } });
   const selfBox = el('div', { style: { ...CARD, marginBottom: 0 } }, el('h2', { style: { marginTop: 0 } }, `${B.os}の自己点検`), el('div', { class: 'notice ' + (s.self_failed.length ? 'warn' : 'ok') }, `${s.self.ok} / ${s.self.total} が達成`), s.self_failed.length ? el('ul', { style: { margin: '6px 0 0 18px', fontSize: '13px' } }, ...s.self_failed.map(f => el('li', {}, f))) : '',

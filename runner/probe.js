@@ -84,7 +84,14 @@ export function htmlToText(html) {
 // そのため「対象の sh 向けに引用した 1 本の文字列」を作り、それをもう一度コンテナの sh 向けに引用する (二重の引用)。
 // これを怠ると $3 や * が対象側で展開される (2026-10-08 に awk '$3==0{print}' が壊れていた)
 export const shq = (a) => `'${String(a).replace(/'/g, "'\\''")}'`;
-export const remoteCommand = (argv) => argv.map(shq).join(' ');
+// ネットワーク機器 (kind: network) は、相手が POSIX のシェルではなく機器の CLI。引用符つきで渡すと「'show'」という名前のコマンドとして読まれ、失敗する。
+//   機器には引用符なしで渡す。そのかわり、引数は英数字と少しの記号だけ (空白・引用符・? などは通さない)
+const NET_ARG = /^[A-Za-z0-9_.:\/=@,+-]+$/;
+export const remoteCommand = (argv, kind = 'ssh') => {
+  if (kind !== 'network') return argv.map(shq).join(' ');
+  if (!argv.every(a => NET_ARG.test(a))) throw new HttpError(400, 'bad_argv', 'ネットワーク機器へのコマンドは、英数字と . _ - / : = @ , + だけで書いてください (空白・引用符は使えません)');
+  return argv.join(' ');
+};
 
 // 出力の伏せ字: 秘密に見える値・KEY=値 / key: 値 (鍵名が秘密)・秘密鍵のブロック
 const SECRET_LINE = /^(\s*[A-Za-z0-9_.-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|credential)[A-Za-z0-9_.-]*\s*[:=]\s*)(.+)$/i;
@@ -404,7 +411,7 @@ echo; echo "${B.os}につながりました。${B.product}の画面に戻って�
     let script, env = {};
     if (t.kind === 'ssh' || t.kind === 'network') {
       const kh = J.parse(t.host_keys, []); if (!kh.length) throw new HttpError(409, 'no_host_key', 'この対象は公開鍵が記録されていません (追加し直してください)');
-      const remote = remoteCommand(argv); // 対象の機械でそのまま動かす中身 (判定済み)。下で 1 本の文字列として ssh に渡す
+      const remote = remoteCommand(argv, t.kind); // 対象の機械でそのまま動かす中身 (判定済み)。下で 1 本の文字列として ssh に渡す
       const sshOpts = `-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/probe/known_hosts -o GlobalKnownHostsFile=/dev/null -o ConnectTimeout=10 -o PasswordAuthentication=${t.credential_id ? 'yes' : 'no'} -o PubkeyAuthentication=yes -o PreferredAuthentications=publickey,password -p ${t.port}`;
       let auth = '', secretLine = '';
       if (t.credential_id) {
