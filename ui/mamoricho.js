@@ -717,12 +717,40 @@ async function renderAuthz(c, p, win) {
   }
 }
 
+/* メニューのまとまりを畳む。見出し (.side-section) を押すと、その下の項目が開く・閉じる。開いたまとまりは、この端末に覚える。
+   いま開いているページのまとまりは、いつも開く (ホームのボタンなどから入ったときに、どこにいるかが分かるように)。
+   メニューをアイコンだけに畳んだとき (.collapsed) と、幅の狭い画面 (900px 以下。アイコンだけの列になる) は、見出しが出ないので、項目を全部出す */
+function foldMenu(win) {
+  const side = (win.body || win.el)?.querySelector('.sidebar'); if (!side) return;
+  if (!document.getElementById('mm-menu-fold')) document.head.append(el('style', { id: 'mm-menu-fold' }, '.sidebar:not(.collapsed) button.mm-folded{display:none}.sidebar .side-section.mm-head{cursor:pointer;display:flex;align-items:center;gap:6px;padding:9px 12px;border-radius:8px;font-size:12.5px;user-select:none}.sidebar .side-section.mm-head:hover{background:rgba(127,127,127,.12)}.sidebar .side-section.mm-head .chev{width:14px;text-align:center;opacity:.7}@media (max-width:900px){.sidebar:not(.collapsed) button.mm-folded{display:flex}.sidebar .side-section.mm-head{display:none}}'));
+  const KEY = 'mamoricho.menu.open'; let saved = []; try { saved = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch { /* 覚えていなければ、全部閉じる */ }
+  const groups = []; let cur = null;
+  for (const ch of [...side.children]) {
+    if (ch.classList.contains('side-section')) { cur = { head: ch, name: ch.textContent.trim(), items: [], open: false }; groups.push(cur); if (groups.length > 1 && ch.previousElementSibling?.classList.contains('sep')) ch.previousElementSibling.style.display = 'none'; }
+    else if (ch.tagName === 'BUTTON' && !ch.classList.contains('nav-toggle')) { if (cur) cur.items.push(ch); }
+    else if (!ch.classList.contains('sep')) cur = null;
+  }
+  /* 開いて見せるのは: 人が開いたまとまり、または、いまのページがあるまとまり (人がそれを閉じたときは、ページが替わるまで閉じたまま) */
+  const show = (g) => { const on = !g.shut && (g.open || g.items.some(b => b.classList.contains('active'))); for (const b of g.items) b.classList.toggle('mm-folded', !on); g.chev.textContent = on ? '▾' : '▸'; g.head.setAttribute('aria-expanded', String(on)); };
+  const remember = () => { try { localStorage.setItem(KEY, JSON.stringify(groups.filter(x => x.open).map(x => x.name))); } catch { /* 覚えられなくてもよい */ } };
+  for (const g of groups) {
+    g.open = saved.includes(g.name); g.shut = false; g.chev = el('span', { class: 'chev' }, '▸'); g.head.classList.add('mm-head'); g.head.prepend(g.chev); g.head.setAttribute('role', 'button'); g.head.tabIndex = 0;
+    const toggle = () => { const on = g.head.getAttribute('aria-expanded') === 'true'; g.open = !on; g.shut = on; remember(); show(g); };
+    g.head.addEventListener('click', toggle); g.head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    show(g);
+  }
+  /* ページが替わったら (項目の active が替わる)、そのまとまりを開く */
+  let last = null; const sync = () => { const a = side.querySelector('button.active'); if (a === last) return; last = a; for (const g of groups) { g.shut = false; show(g); } };
+  new MutationObserver(sync).observe(side, { attributes: true, subtree: true, attributeFilter: ['class'] }); setTimeout(sync, 0);
+}
+
 AIOS.apps.mamoricho = {
   async mount(win, opts) {
     try { Object.assign(B, (await GET('/mamoricho/brand')).brand || {}); } catch { /* 既定のまま */ }
     AIOS.mamorichoBrand = B;
     const W = (fn) => (c, p) => fn(c, p, win);
-    // メニューは、仕事のまとまりごとに見出しをつけて並べる (項目が増えて、何をいつやるか迷うようになったため)。
+    // メニュー: はじめて開いた人に見えるのは、上の 5 つ (ホーム・点検・対象・記録・もしものとき) と、まとまりの名前だけ。名前を押すと中が開く (foldMenu)。
+    //   項目が全部並ぶと、初めての人は何をいつやるか迷い、身構える (利用者の声 2026-11-18)。
     //   ここに名前のある項目 = MENU の順。足された項目 (AIOS.mamorichoExt.routes) のうち名前の無いものは、その group ごとにまとめて後ろへ。hidden はメニューに出さない
     const ext = AIOS.mamorichoExt || { routes: {} };
     const base = {
@@ -732,7 +760,7 @@ AIOS.apps.mamoricho = {
       admin: { label: '管理者アカウントの点検', icon: '🔑', hidden: true, render: renderAdmin }, authz: { label: 'API の権限を確かめる', icon: '🔐', hidden: true, render: renderAuthz },
     };
     const all = { ...base, ...ext.routes };
-    const MENU = [[null, ['home']], ['確かめる', ['check', 'scs', 'targets']], ['そろえる', ['rules', 'ledgers', 'notices']], ['記録と対応', ['records', 'inbox', 'emergency']], ['調べる・学ぶ', ['inquiry', 'manual', 'safety']]];
+    const MENU = [[null, ['home', 'check', 'targets', 'records', 'emergency']], ['SCS・規程・台帳', ['scs', 'rules', 'ledgers', 'notices', 'inbox']], ['調べる・学ぶ', ['inquiry', 'manual', 'safety']]];
     const routes = {}; const put = (k, section) => { const r = all[k]; if (!r || routes[k]) return false; const { sep, section: _s, tail, group, ...rest } = r; routes[k] = { ...rest, render: W(r.render), ...(section ? { sep: true, section } : {}) }; return true; };
     for (const [section, keys] of MENU) { let first = true; for (const k of keys) if (all[k] && !all[k].hidden) { put(k, first ? section : null); first = false; } }
     const groups = new Map(); for (const k of Object.keys(all)) if (!routes[k] && !all[k].hidden) { const g = all[k].group || 'そのほか'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(k); }
@@ -740,6 +768,7 @@ AIOS.apps.mamoricho = {
     for (const k of Object.keys(all)) if (all[k].hidden) put(k, null);
     // route と params の両方があるときは、既定の描画 (params なし) をせずに下で 1 回だけ描く (2 回描くと、非同期の中身が二重に足される)
     const app = routedApp(win, { title: 'まもり帳', defaultRoute: opts.route && opts.params ? null : (opts.route || 'home'), routes });
+    foldMenu(win);
     if (opts.route && opts.params) app.render(opts.route, opts.params);
   },
 };
