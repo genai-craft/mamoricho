@@ -16,6 +16,7 @@ p { margin: 6px 0; } .sub { color: var(--sub); margin: 2px 0 10px; } .muted { co
 .sidebar button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; cursor: pointer; color: var(--ink); }
 .sidebar button:hover { background: rgba(15,23,42,.05); } .sidebar button.active { background: rgba(37,99,235,.1); color: var(--accent); font-weight: 700; }
 .sidebar .sep { height: 1px; background: var(--line); margin: 6px 4px; }
+.sidebar .side-section { font-size: 11px; font-weight: 700; opacity: .65; padding: 2px 12px 4px; letter-spacing: .02em; }
 .content { flex: 1; overflow: auto; padding: 18px 22px 40px; }
 .row { display: flex; align-items: center; gap: 8px; } .grid { display: grid; }
 .btn { font: inherit; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; cursor: pointer; color: var(--ink); white-space: nowrap; }

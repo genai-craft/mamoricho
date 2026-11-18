@@ -722,24 +722,24 @@ AIOS.apps.mamoricho = {
     try { Object.assign(B, (await GET('/mamoricho/brand')).brand || {}); } catch { /* 既定のまま */ }
     AIOS.mamorichoBrand = B;
     const W = (fn) => (c, p) => fn(c, p, win);
-    // SCS 評価制度・規程・台帳・全員に知らせる (ui/mamoricho-scs.js)。after の後ろと、メニューの最後 (tail) に足す。hidden はメニューに出さない
-    const ext = AIOS.mamorichoExt || { routes: {} }; const extR = (keys) => Object.fromEntries(keys.map(k => [k, { ...ext.routes[k], render: W(ext.routes[k].render) }]));
-    const extKeys = Object.keys(ext.routes); const extMenu = extR(extKeys.filter(k => !ext.routes[k].hidden && !ext.routes[k].tail)); const extTail = extR(extKeys.filter(k => ext.routes[k].tail)); const extHidden = extR(extKeys.filter(k => ext.routes[k].hidden));
+    // メニューは、仕事のまとまりごとに見出しをつけて並べる (項目が増えて、何をいつやるか迷うようになったため)。
+    //   ここに名前のある項目 = MENU の順。足された項目 (AIOS.mamorichoExt.routes) のうち名前の無いものは、その group ごとにまとめて後ろへ。hidden はメニューに出さない
+    const ext = AIOS.mamorichoExt || { routes: {} };
+    const base = {
+      home: { label: 'ホーム', icon: '🏠', render: renderHome }, check: { label: '点検', icon: '☑', render: renderCheck }, targets: { label: '対象', icon: '🖥', render: renderTargets }, records: { label: '記録', icon: '📜', render: renderRecords },
+      emergency: { label: 'もしものとき', icon: '🚨', render: renderEmergency }, inquiry: { label: '対話で調べる', icon: '💬', render: renderInquiry }, safety: { label: '安全の仕組み', icon: '🛡', render: renderSafety },
+      // メニューには出さない (ホーム・点検・対象・もしものとき から入る)
+      admin: { label: '管理者アカウントの点検', icon: '🔑', hidden: true, render: renderAdmin }, authz: { label: 'API の権限を確かめる', icon: '🔐', hidden: true, render: renderAuthz },
+    };
+    const all = { ...base, ...ext.routes };
+    const MENU = [[null, ['home']], ['確かめる', ['check', 'scs', 'targets']], ['そろえる', ['rules', 'ledgers', 'notices']], ['記録と対応', ['records', 'inbox', 'emergency']], ['調べる・学ぶ', ['inquiry', 'manual', 'safety']]];
+    const routes = {}; const put = (k, section) => { const r = all[k]; if (!r || routes[k]) return false; const { sep, section: _s, tail, group, ...rest } = r; routes[k] = { ...rest, render: W(r.render), ...(section ? { sep: true, section } : {}) }; return true; };
+    for (const [section, keys] of MENU) { let first = true; for (const k of keys) if (all[k] && !all[k].hidden) { put(k, first ? section : null); first = false; } }
+    const groups = new Map(); for (const k of Object.keys(all)) if (!routes[k] && !all[k].hidden) { const g = all[k].group || 'そのほか'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(k); }
+    for (const [g, keys] of groups) keys.forEach((k, n) => put(k, n === 0 ? g : null));
+    for (const k of Object.keys(all)) if (all[k].hidden) put(k, null);
     // route と params の両方があるときは、既定の描画 (params なし) をせずに下で 1 回だけ描く (2 回描くと、非同期の中身が二重に足される)
-    const app = routedApp(win, { title: 'まもり帳', defaultRoute: opts.route && opts.params ? null : (opts.route || 'home'), routes: {
-      home: { label: 'ホーム', icon: '🏠', render: W(renderHome) },
-      check: { label: '点検', icon: '☑', render: W(renderCheck) },
-      ...extMenu,
-      targets: { label: '対象', icon: '🖥', render: W(renderTargets) },
-      records: { label: '記録', icon: '📜', render: W(renderRecords) },
-      emergency: { label: 'もしものとき', icon: '🚨', sep: true, render: W(renderEmergency) },
-      inquiry: { label: '対話で調べる', icon: '💬', render: W(renderInquiry) },
-      safety: { label: '安全の仕組み', icon: '🛡', render: W(renderSafety) },
-      // メニューには出さない (ホーム・点検・対象・もしものとき から入る)。メニューが並ぶと何をいつやるか迷うため
-      admin: { label: '管理者アカウントの点検', icon: '🔑', hidden: true, render: W(renderAdmin) },
-      authz: { label: 'API の権限を確かめる', icon: '🔐', hidden: true, render: W(renderAuthz) },
-      ...extTail, ...extHidden,
-    } });
+    const app = routedApp(win, { title: 'まもり帳', defaultRoute: opts.route && opts.params ? null : (opts.route || 'home'), routes });
     if (opts.route && opts.params) app.render(opts.route, opts.params);
   },
 };
